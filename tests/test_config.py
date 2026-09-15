@@ -42,8 +42,8 @@ def test_module_settings_loads():
 
 def test_defaults_match_architecture(clean_env):
     s = make()
-    assert s.anthropic_api_key is None
-    assert s.model == "claude-opus-5"
+    assert s.groq_api_key is None
+    assert s.model == "openai/gpt-oss-120b"
     assert s.llm_candidate_k == 25
     assert s.default_top_n == 5
     assert s.min_candidates == 10
@@ -61,15 +61,17 @@ def test_env_overrides(clean_env):
     clean_env.setenv("ENABLE_SEMANTIC_SEARCH", "true")
     clean_env.setenv("RANK_WEIGHTS__RATING", "0.55")
     clean_env.setenv("RANK_WEIGHTS__VOTES", "0.10")
+    clean_env.setenv("MODEL", "qwen/qwen3.6-27b")
     s = make()
     assert s.min_candidates == 7
     assert s.enable_semantic_search is True
     assert s.rank_weights.rating == 0.55
     assert s.rank_weights.budget == 0.15  # untouched nested field keeps its default
+    assert s.model == "qwen/qwen3.6-27b"
 
 
 def test_empty_api_key_means_degraded_mode(clean_env):
-    clean_env.setenv("ANTHROPIC_API_KEY", "")
+    clean_env.setenv("GROQ_API_KEY", "")
     assert make().llm_enabled is False
 
 
@@ -91,15 +93,15 @@ def test_misspelled_env_file_key_is_rejected(clean_env, tmp_path):  # O-11
 
 
 def test_missing_env_file_is_fine(clean_env, tmp_path):  # O-01
-    assert load_settings(_env_file=tmp_path / "does-not-exist.env").model == "claude-opus-5"
+    assert load_settings(_env_file=tmp_path / "does-not-exist.env").model == "openai/gpt-oss-120b"
 
 
 def test_secret_never_appears_in_repr_or_errors(clean_env, tmp_path):  # O-18
-    fake = "sk-ant-test-SECRET123"
-    s = make(anthropic_api_key=fake)
+    fake = "gsk_testSECRET123"
+    s = make(groq_api_key=fake)
     assert fake not in repr(s) and fake not in str(s.model_dump())
     env_file = tmp_path / ".env"
-    env_file.write_text(f"ANTHROPIC_APIKEY={fake}\n")  # misspelled → validation error
+    env_file.write_text(f"GROQ_APIKEY={fake}\n")  # misspelled → validation error
     with pytest.raises(SettingsError) as excinfo:
         load_settings(_env_file=env_file)
     assert fake not in str(excinfo.value)
@@ -116,7 +118,7 @@ def test_env_example_keys_match_settings_fields():  # O-11
     keys = {m.group(1) for m in re.finditer(r"^#?\s*([A-Z][A-Z0-9_]*)=", text, re.MULTILINE)}
     top_level = {k.split("__")[0].lower() for k in keys}
     assert top_level == set(Settings.model_fields)
-    assert re.search(r"^ANTHROPIC_API_KEY=\s*$", text, re.MULTILINE), "committed key must be empty"
+    assert re.search(r"^GROQ_API_KEY=\s*$", text, re.MULTILINE), "committed key must be empty"
 
 
 def test_logging_configuration_is_idempotent():  # O-15, O-18
@@ -128,11 +130,12 @@ def test_logging_configuration_is_idempotent():  # O-15, O-18
     buf = io.StringIO()
     old_stream = handlers[0].setStream(buf)
     try:
-        logging.getLogger("src.test").info("hello key=%s", "sk-ant-abc123")
+        logging.getLogger("src.test").info("hello key=%s old=%s", "gsk_abc123XYZ", "sk-ant-abc123")
     finally:
         handlers[0].setStream(old_stream)
     out = buf.getvalue()
     assert out.count('"msg"') == 1
+    assert "gsk_abc123XYZ" not in out and "gsk_***" in out
     assert "sk-ant-abc123" not in out and "sk-ant-***" in out
 
 

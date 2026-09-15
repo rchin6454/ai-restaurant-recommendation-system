@@ -5,12 +5,12 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "restaurant-recommender"
 version = "0.1.0"
-description = "AI-powered restaurant recommendations over the Zomato Bangalore dataset, ranked and explained by Claude."
+description = "AI-powered restaurant recommendations over the Zomato Bangalore dataset, ranked and explained by an LLM served by Groq."
 readme = "README.md"
 # `str | None` syntax is used throughout; src/__init__.py also guards this at import (O-09).
 requires-python = ">=3.11"
 dependencies = [
-    "anthropic>=0.70",
+    "groq>=1.0",
     "datasets>=2.19",
     "pandas>=2.2",
     "pyarrow>=15",

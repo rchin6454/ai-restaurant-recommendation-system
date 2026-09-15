@@ -1,0 +1,118 @@
+CATALOG QUALITY REPORT  2026-09-15T12:08:09+00:00
+source: ManikaSaini/zomato-restaurant-recommendation
+
+== Rows ==
+raw rows                  51,717
+dropped (empty name)           0
+deduplicated restaurants  12,449   ratio 0.241 (expect 0.20-0.30)
+
+== Raw parse outcomes ==
+rate: new 2,208 · no_rating 7,844 · ok 41,665
+      unparsed/out-of-range values: none
+cost: null 346 · ok 51,371
+      unparsed values: none
+online_order/book_table unrecognized: 0
+
+== Null rate per column (list columns: share of empty lists) ==
+restaurant_id          0.0%
+name                   0.0%
+name_norm              0.0%
+address                0.0%
+url                    0.0%
+location               0.1%
+location_norm          0.1%
+listed_areas           0.0%
+listed_areas_norm      0.0%
+rating                24.2%
+is_new                 0.0%
+is_unrated             0.0%
+votes                  0.0%
+cost_for_two           0.7%
+budget_band            0.7%
+cuisines               0.2%
+cuisines_norm          0.2%
+rest_type              0.5%
+dish_liked            62.8%
+online_order           0.0%
+book_table             0.0%
+listed_types           0.0%
+bayesian_rating       24.2%
+popularity_pct         0.0%
+text_blob              0.0%
+
+== Ratings ==
+rated 9,433 · unrated 3,016 (NEW 595) · imputed 0 (never imputed by construction)
+min 1.8 · mean 3.63 · median 3.7 · max 4.9
+  (-0.001, 2.5]     75  
+  (2.5, 3.0]       814  #####
+  (3.0, 3.5]     2,990  ###################
+  (3.5, 4.0]     4,077  ##########################
+  (4.0, 4.5]     1,379  #########
+  (4.5, 5.0]        98  #
+bayesian prior: C = 3.6253, m = 50 votes
+
+== Budget bands (₹ for two) ==
+costed 12,358 · null cost 91 (band=None, kept for unbanded queries)
+P1 ₹100 · median ₹400 · P99 ₹2,000 · max ₹6,000
+  low     ₹   40 - ₹  250    3,184 rows  25.8%
+  medium  ₹  300 - ₹  469    4,505 rows  36.5%
+  high    ₹  500 - ₹6,000    4,669 rows  37.8%
+
+== Top 20 areas (of 93) ==
+  Whitefield                      885
+  Electronic City                 730
+  BTM Layout                      725
+  HSR Layout                      704
+  Marathahalli                    682
+  JP Nagar                        523
+  Indiranagar                     523
+  Bannerghatta Road               474
+  Jayanagar                       365
+  Bellandur                       360
+  Sarjapur Road                   338
+  New BEL Road                    308
+  Banashankari                    294
+  Koramangala 5th Block           264
+  Kalyan Nagar                    240
+  Malleshwaram                    237
+  Rajajinagar                     235
+  Basavanagudi                    211
+  Banaswadi                       208
+  Frazer Town                     192
+
+== Top 20 cuisines (of 105) ==
+  North Indian                  5,024
+  Chinese                       3,587
+  South Indian                  2,370
+  Fast Food                     2,130
+  Biryani                       1,738
+  Desserts                      1,252
+  Beverages                     1,153
+  Continental                     936
+  Street Food                     740
+  Cafe                            732
+  Bakery                          715
+  Italian                         555
+  Andhra                          482
+  Ice Cream                       471
+  Pizza                           437
+  Burger                          401
+  Seafood                         387
+  Rolls                           384
+  Mughlai                         383
+  Kerala                          313
+
+== Listing types ==
+  Delivery                      9,315
+  Dine-out                      8,028
+  Desserts                      1,667
+  Cafes                           712
+  Drinks & nightlife              423
+  Pubs and bars                   352
+  Buffet                          340
+
+== Vocabulary review ==
+aliases applied — cuisine {'afghani': 'Afghan', 'biriyani': 'Biryani', 'café': 'Cafe', 'hot dogs': 'Hot Dogs'}, rest_type {'irani cafee': 'Irani Cafe', 'café': 'Cafe'}, area {'btm': 'BTM Layout', 'hsr': 'HSR Layout'}
+all cuisines: Afghan, African, American, Andhra, Arabian, Asian, Assamese, Australian, Awadhi, Bakery, Bar Food, BBQ, Belgian, Bengali, Beverages, Bihari, Biryani, Bohri, British, Bubble Tea, Burger, Burmese, Cafe, Cantonese, Charcoal Chicken, Chettinad, Chinese, Coffee, Continental, Desserts, Drinks Only, European, Fast Food, Finger Food, French, German, Goan, Greek, Grill, Gujarati, Healthy Food, Hot Dogs, Hyderabadi, Ice Cream, Indonesian, Iranian, Italian, Japanese, Jewish, Juices, Kashmiri, Kebab, Kerala, Konkan, Korean, Lebanese, Lucknowi, Maharashtrian, Malaysian, Malwani, Mangalorean, Mediterranean, Mexican, Middle Eastern, Mithai, Modern Indian, Momos, Mongolian, Mughlai, Naga, Nepalese, North Eastern, North Indian, Oriya, Paan, Pan Asian, Parsi, Pizza, Portuguese, Rajasthani, Raw Meats, Roast Chicken, Rolls, Russian, Salad, Sandwich, Seafood, Sindhi, Singaporean, South American, South Indian, Spanish, Sri Lankan, Steak, Street Food, Sushi, Tamil, Tea, Tex-Mex, Thai, Tibetan, Turkish, Vegan, Vietnamese, Wraps
+all rest types: Bakery, Bar, Beverage Shop, Bhojanalya, Cafe, Casual Dining, Club, Confectionery, Delivery, Dessert Parlor, Dhaba, Fine Dining, Food Court, Food Truck, Irani Cafe, Kiosk, Lounge, Meat Shop, Mess, Microbrewery, Pop Up, Pub, Quick Bites, Sweet Shop, Takeaway
+all areas (confirm Bengaluru-only coverage): Banashankari, Banaswadi, Bannerghatta Road, Basavanagudi, Basaveshwara Nagar, Bellandur, Bommanahalli, Brigade Road, Brookefield, BTM Layout, Central Bangalore, Church Street, City Market, Commercial Street, Cunningham Road, CV Raman Nagar, Domlur, East Bangalore, Ejipura, Electronic City, Frazer Town, HBR Layout, Hebbal, Hennur, Hosur Road, HSR Layout, Indiranagar, Infantry Road, ITPL Main Road, Whitefield, Jakkur, Jalahalli, Jayanagar, Jeevan Bhima Nagar, JP Nagar, Kaggadasapura, Kalyan Nagar, Kammanahalli, Kanakapura Road, Kengeri, Koramangala, Koramangala 1st Block, Koramangala 2nd Block, Koramangala 3rd Block, Koramangala 4th Block, Koramangala 5th Block, Koramangala 6th Block, Koramangala 7th Block, Koramangala 8th Block, KR Puram, Kumaraswamy Layout, Langford Town, Lavelle Road, Magadi Road, Majestic, Malleshwaram, Marathahalli, MG Road, Mysore Road, Nagarbhavi, Nagawara, New BEL Road, North Bangalore, Old Airport Road, Old Madras Road, Peenya, Race Course Road, Rajajinagar, Rajarajeshwari Nagar, Rammurthy Nagar, Residency Road, Richmond Road, RT Nagar, Sadashiv Nagar, Sahakara Nagar, Sanjay Nagar, Sankey Road, Sarjapur Road, Seshadripuram, Shanti Nagar, Shivajinagar, South Bangalore, St. Marks Road, Thippasandra, Ulsoor, Uttarahalli, Varthur Main Road, Whitefield, Vasanth Nagar, Vijay Nagar, West Bangalore, Whitefield, Wilson Garden, Yelahanka, Yeshwantpur

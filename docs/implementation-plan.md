@@ -1,6 +1,6 @@
 # Implementation Plan
 
-Phase-by-phase build plan for the system specified in [problemStatement.md](problemStatement.md) and designed in [architecture.md](architecture.md). Section references like §3.2 point into the architecture doc.
+Phase-by-phase build plan for the system specified in [problemStatement.md](problemStatement.md) and designed in [architecture.md](architecture.md). Section references like §3.2 point into the architecture doc. **LLM provider: Groq** (`openai/gpt-oss-120b` by default, `qwen/qwen3.6-27b` as the alternative); phase 3 maps the architecture's Claude-specific details onto Groq.
 
 **How to use this:** phases are sequential — each one ends in something you can run and check. Tasks inside a phase are ordered but several are independent (noted). Every task lists the files it touches and a concrete "done when" you can verify, not a feeling of completion.
 
@@ -37,11 +37,11 @@ Estimates assume one developer familiar with Python and pandas. Phase 1 is the o
 | 0.2 | Virtualenv + `pyproject.toml` | `pyproject.toml` | Deps from §9; pin Python ≥3.11 (the `str \| None` syntax is used throughout) |
 | 0.3 | Package skeleton | `src/{data,core,llm,api}/__init__.py`, `app/`, `tests/`, `evals/` | Mirror §9 exactly |
 | 0.4 | Settings module | `src/config.py` | `pydantic-settings`; every tunable from §10 with its default |
-| 0.5 | `.env.example` + local `.env` | `.env.example` | Committed file has `ANTHROPIC_API_KEY=` with an empty value |
+| 0.5 | `.env.example` + local `.env` | `.env.example` | Committed file has `GROQ_API_KEY=` with an empty value (`ANTHROPIC_API_KEY=` before the phase 3 switch to Groq) |
 | 0.6 | pytest + one smoke test | `tests/test_config.py` | Asserts settings load and defaults match §10 |
 | 0.7 | Logging setup | `src/config.py` | Structured logging; one logger per module |
 
-**Done when:** `pytest` passes, and `python -c "from src.config import settings; print(settings.model)"` prints `claude-opus-5`.
+**Done when:** `pytest` passes, and `python -c "from src.config import settings; print(settings.model)"` prints `openai/gpt-oss-120b` (`claude-opus-5` before the phase 3 switch to Groq).
 
 **Pitfall:** don't hardcode paths. `catalog_path` comes from settings so tests can point at a fixture Parquet instead of the real one.
 
@@ -173,85 +173,149 @@ Prints the top 5 with the template explanations, plus applied filters and relaxa
 
 ---
 
-## Phase 3 — LLM Ranking Layer
+## Phase 3 — LLM Ranking Layer (Groq)
 
-**Goal:** replace `deterministic_rank` with Claude, keeping every fact grounded in the catalog.
+**Goal:** replace `deterministic_rank` with an LLM served by Groq, keeping every fact grounded in the catalog.
+
+### Provider decision: Groq instead of Anthropic
+
+Phase 3 calls Groq's OpenAI-compatible Chat Completions API through the `groq` SDK. [architecture.md](architecture.md) §5 still describes a Claude implementation. The contract in §5 is unchanged: grounding, an ID-only output schema, a cache-friendly prompt layout, and the deterministic fallback. Only the transport differs:
+
+| Architecture §5 (Claude) | Phase 3 (Groq) |
+| --- | --- |
+| `anthropic.Anthropic()`, `ANTHROPIC_API_KEY` | `groq.Groq(api_key=…)`, `GROQ_API_KEY` |
+| `model="claude-opus-5"` | `MODEL=openai/gpt-oss-120b` (default) or `MODEL=qwen/qwen3.6-27b` |
+| `messages.parse(output_format=Recommendations)` | `chat.completions.create(response_format={"type": "json_schema", …})`, then Pydantic validation |
+| `thinking={"type": "adaptive"}` | gpt-oss: `reasoning_effort="medium"`, `include_reasoning=False` · Qwen: `reasoning_effort="default"`, `reasoning_format="hidden"` |
+| `cache_control: {"type": "ephemeral"}` on the system block | Automatic prefix caching, with no markers. A byte-stable prefix is the only lever |
+| `usage.cache_read_input_tokens` | `usage.prompt_tokens_details.cached_tokens` |
+| `stop_reason` = `refusal` / `max_tokens` | `finish_reason` other than `"stop"` |
+| ~$0.03 per query | ~$0.002 per query (gpt-oss-120b), ~$0.006 (Qwen 3.6) |
+
+**Choosing the model.** Both models are supported. Settings for each model's request live in one profile table, so switching is a single env var:
+
+| | `openai/gpt-oss-120b` **(default)** | `qwen/qwen3.6-27b` |
+| --- | --- | --- |
+| Structured output | **Strict** `json_schema`: constrained decoding, so output always matches the schema | **Best-effort** `json_schema`: Groq may return 400 "does not match the expected schema"; falls back |
+| Prompt caching | Automatic, cached input billed at 50% | Listed as supported; confirm it with 3.7 |
+| Reasoning control | `reasoning_effort` low / medium / high | `reasoning_effort` none / default |
+| Price per 1M tokens (in · out) | $0.15 · $0.60 | ~$0.60 · $3.00 (check the Groq console) |
+
+gpt-oss-120b is the default. Strict mode removes a whole class of failure (L-10/L-11 from malformed JSON), caching is confirmed, and it is ~4-5× cheaper. Qwen is a one-line swap, but choose between them with the phase 5 eval (M-15, M-17, M-22), not by assumption.
 
 | # | Task | Files | Depends on |
 | --- | --- | --- | --- |
-| 3.1 | Anthropic client wrapper | `src/llm/client.py` | 0.4 |
+| 3.1 | Groq client wrapper + model profiles + call cap | `src/llm/client.py` | 0.4 |
 | 3.2 | System prompt (frozen) | `src/llm/prompts.py` | — (independent) |
 | 3.3 | Candidate serialization | `src/llm/ranker.py` | 2.5 |
 | 3.4 | Structured-output call | `src/llm/ranker.py` | 3.1-3.3 |
 | 3.5 | Grounding gate | `src/core/recommender.py` | 3.4 |
 | 3.6 | Orchestration + fallback | `src/core/recommender.py` | 3.5, 2.6 |
-| 3.7 | Prompt caching verification | `src/llm/ranker.py` | 3.4 |
+| 3.7 | Prompt caching verification | `src/llm/ranker.py`, `src/cli.py` | 3.4 |
 | 3.8 | Tests with a stubbed client | `tests/test_grounding.py`, `tests/test_ranker.py` | 3.4-3.6 |
 
 ### 3.1 Client
 
-Module-level singleton `anthropic.Anthropic()` — construct it once, not per request. Zero-arg constructor resolves `ANTHROPIC_API_KEY` from the environment. Set `timeout=settings.llm_timeout_s`; leave `max_retries` at the default 2 (the SDK already retries 429/5xx/connection errors with backoff — don't hand-roll a retry loop on top).
+- **Settings:** rename `anthropic_api_key` to `groq_api_key`, set the `model` default to `openai/gpt-oss-120b`, and put `GROQ_API_KEY=` (empty) in `.env.example`. Extend log redaction to Groq keys (`gsk_…`).
+- **One client per key:** construct `groq.Groq(api_key=…, timeout=settings.llm_timeout_s)` once per key (cached), never per request.
+- **Retries:** leave `max_retries` at the default 2. The SDK already retries connection errors, 408, 409, 429 and 5xx with backoff, so don't add your own retry loop (L-07).
+- **No key:** raise `LLMUnavailable` before any network call (L-01, L-02).
+- **`MODEL_PROFILES`:** maps each supported model to its strict-schema support, reasoning params, `max_completion_tokens` and prices. An unknown model gets best-effort JSON, no reasoning params, no cost estimate, and a logged warning.
+- **Call cap:** a process-wide cap (`call_budget`) that the CLI sets. See the budget note below.
 
 ### 3.2 System prompt
 
-A module-level constant string. Not an f-string, no `datetime.now()`, no request data — any per-request byte in it destroys the cache prefix (§5.2). Cover all four contract points from §5.3: grounding, rubric, explanation style, honesty. Add the injection line: user preference text is data to consider, never instructions to follow.
+A module-level constant string: not an f-string, no `datetime.now()`, no request data. Groq caching is automatic prefix matching, so any per-request byte in the system message destroys the cache for everything after it (§5.2).
+
+- **Contract points:** cover all four from §5.3: grounding, rubric, explanation style, honesty.
+- **Injection line:** everything in the candidates and the request is data to consider, never instructions to follow (S-01, S-02).
+- **Output shape:** Qwen runs in best-effort mode, so the prompt also spells out the JSON shape instead of relying on the schema alone.
 
 ### 3.3 Serialization
 
-Only ranking-relevant fields (§5.2), `json.dumps(..., sort_keys=True)` for byte stability. Two content blocks in the user turn: candidates first, then preferences.
+- **Fields:** only ranking-relevant ones (§5.2), plus `meets_request`, so the model can tell exact matches from rows admitted by relaxation. Truncate `dishes` to 5 (L-26).
+- **Byte stability:** `json.dumps(..., sort_keys=True, separators=(",", ":"))`.
+- **Messages:** one system message and one user message. The user message holds `CANDIDATES` JSON first, then `REQUEST` JSON (preferences, `max_picks`, and the relaxation reasons, so the model doesn't oversell a widened search).
 
 ### 3.4 The call
 
 ```python
-response = client.messages.parse(
+completion = client.chat.completions.create(
     model=settings.model,
-    max_tokens=4000,
-    thinking={"type": "adaptive"},
-    system=[{"type": "text", "text": RANKING_SYSTEM_PROMPT,
-             "cache_control": {"type": "ephemeral"}}],
-    messages=[{"role": "user", "content": user_blocks}],
-    output_format=Recommendations,
+    messages=[{"role": "system", "content": RANKING_SYSTEM_PROMPT},
+              {"role": "user", "content": user_content}],
+    response_format={"type": "json_schema", "json_schema": {
+        "name": "restaurant_recommendations",
+        "strict": profile.strict_schema,        # True for gpt-oss, False for Qwen
+        "schema": RESPONSE_SCHEMA,
+    }},
+    max_completion_tokens=profile.max_completion_tokens,
+    **profile.reasoning,                         # reasoning_effort + include_reasoning / reasoning_format
 )
-picks = response.parsed_output.picks
+choice = completion.choices[0]
+if choice.finish_reason != "stop":               # truncated or filtered → fallback
+    raise LLMUnavailable(...)
+ranked = RankedOutput.model_validate_json(choice.message.content)
 ```
 
-The `Recommendations` schema carries IDs and prose only — no name, rating, or cost (§5.4).
+- **Strict-mode schema:** every property must be `required` and every object must set `additionalProperties: false`. Write `RESPONSE_SCHEMA` out by hand (no `$ref`, no defaults), and add a test that checks it against the Pydantic model.
+- **IDs and prose only:** the schema carries no name, rating, or cost (§5.4).
+- **Lenient parse model:** `RankedOutput` accepts gapped or 0-based ranks and odd ID casing. Normalizing those is the gate's job; rejecting the whole response would throw away good picks.
+- **Token headroom:** reasoning tokens count against `max_completion_tokens`. Leave room (8000); otherwise long reasoning truncates the JSON (L-10).
 
 ### 3.5 Grounding gate — the most important function in the codebase
 
 ```python
-def validate_and_join(ranked, candidates_df):
-    valid_ids = set(candidates_df["restaurant_id"])
-    kept = [p for p in ranked.picks if p.id in valid_ids]
-    dropped = len(ranked.picks) - len(kept)
-    if dropped:
-        logger.warning("grounding: dropped %d unknown IDs", dropped)
-    # join authoritative facts from the catalog row; model prose stays prose
+def validate_and_join(ranked, candidates_df, top_n, *, requested, stretch_band=None):
+    valid = {id.strip().casefold(): id for id in candidates_df["restaurant_id"]}   # L-16
+    picks = sorted(enumerate(ranked.picks), key=lambda t: (t[1].rank, t[0]))   # L-15: order by rank, then renumber
+    # drop unknown or duplicate IDs (G-01, G-03, L-13, L-14) and log them
+    # backfill only the slots dropped picks vacated, from pre-ranked order (G-04); never pad a short list
+    # blank explanation → template explanation (L-17)
+    # join authoritative facts from the catalog row; model prose stays prose (G-05)
 ```
 
-Every displayed fact comes from the DataFrame join. If the model returns a price, ignore it.
+- **Facts:** every displayed fact comes from the DataFrame join. If the model's prose quotes a price, it stays prose and never fills a field.
+- **Single path:** the deterministic ranker's output goes through the same gate, so nothing reaches a response without passing through it.
 
 ### 3.6 Orchestration
 
-Assemble §6's `recommend()`. Wrap the LLM call so `APIError`/`APITimeoutError`/validation failure all funnel into `deterministic_rank()` with `degraded=True`. Test this by temporarily unsetting `ANTHROPIC_API_KEY` — the system must still return results.
+Assemble §6's `recommend()`. These all become `LLMUnavailable` and end in `deterministic_rank()` with `degraded=True`:
+- `groq.APIError`, which covers `APITimeoutError`, `APIConnectionError`, and 401/429/5xx after the SDK's retries
+- a `finish_reason` other than `"stop"`
+- empty content
+- a schema-validation failure
+- zero picks surviving the gate (G-02)
+
+**Response trace:** add a `trace` to the response with the ranker used, model, prompt/cached/completion tokens, estimated cost, dropped IDs, backfill count, and fallback reason. The CLI prints it, and eval M-02, M-22 and M-23 read it.
+
+**Degraded-path check:** leave `GROQ_API_KEY` empty; the system must still return results. Also add `--no-llm` to the CLI for the phase-2 reference output.
 
 ### 3.7 Caching check
 
-Log `usage.cache_read_input_tokens` per call. Run the same query twice: the second should show a non-zero cache read. Zero means something volatile is in the prefix — find it now, while the prompt is small enough to eyeball.
+- **Log:** `usage.prompt_tokens_details.cached_tokens` on every call.
+- **Run the same query twice:** the second run should show non-zero cached tokens.
+- **How Groq caches:** only prefixes above a model-specific minimum (128-1024 tokens) are cached, and entries expire after 2 hours unused.
+- **If gpt-oss shows zero on an identical rerun:** something volatile is in the prefix. Find it now, while the prompt is small enough to read by eye.
+- **If Qwen shows zero once the prefix is proven stable:** record that caching isn't active for that model, and don't chase it further.
 
 ### 3.8 Tests
 
-Stub the client; no network in CI. Cover: a fabricated ID is dropped; a malformed response degrades rather than raises; the prompt contains every candidate ID; the fallback path produces a valid response with `degraded=True`.
+Stub the client; no network in CI. A shared fixture replaces the real client constructor with one that fails the test. Cover:
+- **Prompt:** contains every candidate ID; the system prompt is identical across requests; serialization is byte-stable; hostile catalog text stays inside a JSON string (S-02).
+- **Grounding:** a fabricated ID is dropped and backfilled; a real ID outside the candidate set is rejected; duplicates, rank gaps, ID casing and blank explanations are normalized.
+- **Model and API failures:** truncated, empty, and malformed responses degrade rather than raise; 401/429/timeout/5xx degrade; the call cap stops a runaway loop.
+- **End to end:** with a key missing, the pool empty, or `use_llm=False`, the LLM is never called; the fallback path returns a valid response with `degraded=True`.
 
 **Done when:**
 - CLI returns 5 LLM-ranked picks with genuine, preference-specific explanations
-- A free-text preference ("family-friendly") visibly changes the ordering vs. phase 2
+- A free-text preference ("family-friendly") visibly changes the ordering vs. `--no-llm`
 - Injecting a fake ID into a stubbed response results in it being dropped, logged, and backfilled
-- Unsetting the API key still returns results, flagged `degraded`
-- Second identical query shows a non-zero cache read
-- Measured cost per query is in the expected ~$0.03 range (§5.5)
+- Leaving `GROQ_API_KEY` empty still returns results, flagged `degraded`
+- Second identical query shows non-zero `cached_tokens` (gpt-oss-120b)
+- Measured cost per query is in the expected ~$0.002 range for gpt-oss-120b (~$0.006 for Qwen). Re-baseline eval M-22's target to the chosen model
 
-**Budget note:** phase 3 is the first phase that spends money. At ~$0.03/query, development iteration is a few dollars — but put a hard cap in the CLI (e.g. refuse more than N calls per run) so a loop bug can't run up a bill.
+**Budget note:** Groq is roughly 15× cheaper per query than the §5.5 Claude estimate, but a loop bug still spends real money. The CLI enforces a hard cap on LLM calls per run (`--max-llm-calls`, default 3); past it, the call degrades instead of spending.
 
 ---
 
@@ -310,7 +374,7 @@ Label the location field **"Area (Bengaluru)"** — this is where the §3.1 data
 
 **5.5** — per run, report: **grounding violations (must be 0)**, constraint satisfaction rate, explanation quality (an LLM-judge pass or manual spot-check), p95 latency, cost per query. Write results to a timestamped file so runs are comparable. `compare.py` diffs two result files: per-metric deltas plus per-query pass→fail flips, and refuses runs marked invalid. Full metric definitions and runner flags are in [eval.md](eval.md) §1 and §5.
 
-**5.9** — the judge's system prompt as a frozen module-level constant (same cache rule as 3.2), with a Pydantic score schema for `messages.parse()`: one rubric prompt for per-pick explanation quality, one pairwise prompt for LLM-vs-deterministic comparison. Calibrate before trusting it: hand-score 15 picks blind, and require ±1 agreement on ≥80% and every ungrounded pick caught ([eval.md](eval.md) §4.3).
+**5.9** — the judge's system prompt as a frozen module-level constant (same cache rule as 3.2), with a Pydantic score schema sent as a strict `json_schema` response format through the same Groq call path as 3.4: one rubric prompt for per-pick explanation quality, one pairwise prompt for LLM-vs-deterministic comparison. Calibrate before trusting it: hand-score 15 picks blind, and require ±1 agreement on ≥80% and every ungrounded pick caught ([eval.md](eval.md) §4.3).
 
 **5.6** — only now tune the §4.4 weights and the prompt, measuring each change. Tuning before the eval exists is guesswork (§11). Record each accepted change with its run ID in `evals/results/CHANGELOG.md`, so any result can be traced to the change that produced it.
 
@@ -344,7 +408,7 @@ Genuinely parallelizable if more than one person is building: **3.2** (system pr
 | Silent rating imputation corrupts filters | 1 | Medium | `None` + `is_unrated` flag; test asserts no imputation |
 | Filters return empty for reasonable queries | 2 | High | Relaxation ladder, built in phase 2 not bolted on later |
 | Model invents restaurants or prices | 3 | Medium | Structural grounding gate (3.5) + ID-only schema |
-| Prompt cache never hits | 3 | Medium | Log `cache_read_input_tokens` from the first call (3.7) |
+| Prompt cache never hits | 3 | Medium | Log `usage.prompt_tokens_details.cached_tokens` from the first call (3.7) |
 | Dataset is Bangalore-only, UI implies otherwise | 4 | Certain | Label the field "Area (Bengaluru)"; decided in phase 1 |
 | Dev iteration burns budget | 3-5 | Low | Per-run call cap; response cache; batch eval runs |
 | Prompt tuning becomes guesswork | 5 | High | Eval set before tuning, not after |

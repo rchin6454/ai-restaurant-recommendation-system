@@ -57,16 +57,16 @@ class Settings(BaseSettings):
         env_file=PROJECT_ROOT / ".env",
         env_file_encoding="utf-8",
         env_nested_delimiter="__",
-        # `ANTHROPIC_API_KEY=` (empty) means "no key" → degraded mode, not an empty-string key.
+        # `GROQ_API_KEY=` (empty) means "no key" → degraded mode, not an empty-string key.
         env_ignore_empty=True,
         # A misspelled key in .env fails loudly instead of silently using the default (O-11).
         extra="forbid",
         frozen=True,
     )
 
-    # --- §10 tunables ---
-    anthropic_api_key: SecretStr | None = None
-    model: str = "claude-opus-5"
+    # --- §10 tunables (LLM served by Groq; implementation plan phase 3) ---
+    groq_api_key: SecretStr | None = None
+    model: str = "openai/gpt-oss-120b"  # or "qwen/qwen3.6-27b"; per-model params in src/llm/client.py
     llm_candidate_k: PositiveInt = 25
     default_top_n: PositiveInt = 5
     min_candidates: PositiveInt = 10
@@ -92,7 +92,7 @@ class Settings(BaseSettings):
 
     @property
     def llm_enabled(self) -> bool:
-        return self.anthropic_api_key is not None
+        return self.groq_api_key is not None
 
 
 class SettingsError(RuntimeError):
@@ -122,13 +122,14 @@ def load_settings(**overrides: object) -> Settings:
 # Logging
 # ---------------------------------------------------------------------------
 
-_SECRET_PATTERN = re.compile(r"sk-ant-[A-Za-z0-9_\-]+")
+# Groq keys (`gsk_…`), plus Anthropic-style keys in case an old .env is still around.
+_SECRET_PATTERN = re.compile(r"(gsk_|sk-ant-)[A-Za-z0-9_\-]+")
 _HANDLER_NAME = "src-json"
 _STD_RECORD_ATTRS = set(vars(logging.makeLogRecord({}))) | {"message", "asctime"}
 
 
 def redact(text: str) -> str:
-    return _SECRET_PATTERN.sub("sk-ant-***", text)
+    return _SECRET_PATTERN.sub(lambda m: f"{m.group(1)}***", text)
 
 
 class JsonFormatter(logging.Formatter):
