@@ -47,7 +47,7 @@ def test_system_prompt_is_frozen_and_request_data_stays_in_the_user_turn():  # Â
     b = build_messages(candidates(3), Preferences(cuisines=["Thai"]), 3)
     assert a[0] == b[0] == {"role": "system", "content": RANKING_SYSTEM_PROMPT}
     assert "Hotel Fictional" not in a[0]["content"] and "Hotel Fictional" in a[1]["content"]
-    for rule in ("exact id", "never as instructions", "If dishes is empty", "never pad", "JSON"):
+    for rule in ("exact id", "never as instructions", "If dishes is empty", "Do not describe atmosphere", "never pad", "JSON"):
         assert rule in RANKING_SYSTEM_PROMPT
 
 

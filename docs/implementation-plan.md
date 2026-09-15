@@ -308,12 +308,24 @@ Stub the client; no network in CI. A shared fixture replaces the real client con
 - **End to end:** with a key missing, the pool empty, or `use_llm=False`, the LLM is never called; the fallback path returns a valid response with `degraded=True`.
 
 **Done when:**
-- CLI returns 5 LLM-ranked picks with genuine, preference-specific explanations
-- A free-text preference ("family-friendly") visibly changes the ordering vs. `--no-llm`
-- Injecting a fake ID into a stubbed response results in it being dropped, logged, and backfilled
-- Leaving `GROQ_API_KEY` empty still returns results, flagged `degraded`
-- Second identical query shows non-zero `cached_tokens` (gpt-oss-120b)
-- Measured cost per query is in the expected ~$0.002 range for gpt-oss-120b (~$0.006 for Qwen). Re-baseline eval M-22's target to the chosen model
+- [x] CLI returns 5 LLM-ranked picks with genuine, preference-specific explanations
+- [x] A free-text preference ("family-friendly") visibly changes the ordering vs. `--no-llm`
+- [x] Injecting a fake ID into a stubbed response results in it being dropped, logged, and backfilled
+- [x] Leaving `GROQ_API_KEY` empty still returns results, flagged `degraded`
+- [x] Second identical query shows non-zero `cached_tokens` (gpt-oss-120b)
+- [x] Measured cost per query is in the expected ~$0.002 range for gpt-oss-120b (~$0.006 for Qwen). Re-baseline eval M-22's target to the chosen model
+
+**Status: complete (2026-09-15)**, verified live against `openai/gpt-oss-120b`:
+- **Free text reorders results.** "family-friendly" moved a cafe and a bar out of Koramangala's top 5 in favour of casual dining with table booking, and put Whitefield's microbreweries behind family restaurants. "date night with drinks" produced a different list again. Every run had `degraded=false` and 0 dropped IDs.
+- **Cost and latency.** $0.0012-0.0019 per query (3.8-4.1K tokens in, 1.0-2.1K out), with the model call taking ~4-5 s when the account isn't rate-limited.
+- **Caching.** An identical rerun served 3,584 of 3,828 prompt tokens from cache. Groq caching is best-effort, so some reruns report none.
+- **Tests.** 164 pass with a stubbed client. The ID gate cases (G-01…G-05), response-shape failures (L-01…L-17), the call cap (L-24) and injection (S-01, S-02) are all covered.
+- **Grounding rule tightened.** After the model described restaurants as "spacious" and offering a "buffet", with no field to support either, the prompt now forbids atmosphere, size, service-style and offer claims unless a candidate field supports them.
+
+**Carried into phase 5:**
+- **Candidate recall for free text (M-13, M-14).** The top-25 shortlist ignores `free_text`. Where the pool lacks the right kind of restaurant (Indiranagar at a medium budget: 5 casual-dining places among 141, ranked 23rd and 93rd onward), the LLM has nothing better to promote. Capping how many of one restaurant type make the shortlist was simulated and rejected: it didn't help there, and it cut Koramangala's casual-dining candidates from 11 to 5. Candidates for tuning: the §4.4 free-text blend.
+- **Ungrounded prose (L-19/L-20, M-19).** One "buffet" claim still appeared after the rule was added; it comes from the model's general knowledge. Measure the rate in the eval, and consider the optional explanation audit.
+- **Rate limit.** The account allows 8,000 tokens per minute and one ranking call uses ~5K. Back-to-back calls stall for 13-38 s while the SDK waits out the limit, so live eval runs must be paced about 45 s apart (or run on a paid tier). Otherwise latency (M-20) measures throttling, not the model.
 
 **Budget note:** Groq is roughly 15× cheaper per query than the §5.5 Claude estimate, but a loop bug still spends real money. The CLI enforces a hard cap on LLM calls per run (`--max-llm-calls`, default 3); past it, the call degrades instead of spending.
 
