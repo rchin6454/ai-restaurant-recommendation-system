@@ -1,0 +1,25 @@
+# Secrets — never commit (O-10, S-07)
+.env
+.env.*
+!.env.example
+
+# Data: HF cache and generated catalog are rebuilt by `python -m src.data.ingest`
+data/raw/
+data/processed/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/
