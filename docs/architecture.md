@@ -309,8 +309,11 @@ def recommend(prefs: Preferences, top_n: int = 5) -> RecommendationResponse:
 POST /recommend        preferences → ranked recommendations
 GET  /meta/locations   area vocabulary (populates the UI dropdown)
 GET  /meta/cuisines    cuisine vocabulary
-GET  /health           catalog loaded, row count, Anthropic reachability
+GET  /meta/budgets     each budget band's rupee range (labels the UI's budget radio)
+GET  /health           catalog loaded, row count, model, whether an LLM key is configured
 ```
+
+The `/recommend` body is `Preferences` (§4.1) plus optional `top_n` and `use_llm`. Unknown fields are rejected.
 
 **Response shape:**
 
@@ -333,7 +336,15 @@ GET  /health           catalog loaded, row count, Anthropic reachability
 }
 ```
 
-`applied_filters` and `relaxations` are not optional polish — they are what makes the result legible when it isn't what the user expected.
+`applied_filters` and `relaxations` are not optional polish — they are what makes the result legible when it isn't what the user expected. The full model is `RecommendationResponse` in `src/core/models.py`. Beyond the fields above, it carries `outcome`, `interpretations` (how typed values were matched), `suggestions`, `trace` (ranker, model, tokens, fallback reason), and, when nothing matches, `blocking_constraints`: the filters whose removal alone would yield results, which the UI turns into one-click relaxation.
+
+**Error envelope.** Every non-2xx response, whether validation (422), unknown route (404), oversized body (413), catalog not loaded (503) or unhandled error (500), has one shape. Stack traces and internal messages go to the logs only, matched by `request_id`:
+
+```json
+{"error": {"code": "invalid_request", "message": "The request is invalid. See `details`.",
+           "details": [{"field": "min_rating", "message": "Input should be less than or equal to 5"}],
+           "request_id": "5fde33c1d8b74563"}}
+```
 
 ---
 

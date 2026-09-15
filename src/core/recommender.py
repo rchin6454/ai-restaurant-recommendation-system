@@ -94,6 +94,7 @@ def recommend(
             applied_filters=applied,
             relaxations=retrieval.relaxations,
             interpretations=normalized.interpretations,
+            blocking_constraints=[name for name, _ in retrieval.blocking],
         )
 
     candidates = pre_rank(

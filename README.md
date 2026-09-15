@@ -79,6 +79,37 @@ MODEL=qwen/qwen3.6-27b python -m src.cli --location Koramangala --cuisine Italia
 - **Degraded mode:** with no key, a Groq error, a truncated or malformed response, or no valid pick, the deterministic ranker answers and the response says `degraded: true` with the reason in `trace.fallback_reason`.
 - **Cost and caching:** the CLI header shows tokens, cached tokens and estimated cost. Run the same query twice; the second should report cached tokens. `--max-llm-calls` (default 3) caps paid calls per run.
 
+## API and UI (phase 4)
+
+Run each in its own terminal from the repository root, with the venv active:
+
+```bash
+uvicorn src.api.main:app --reload       # API on http://localhost:8000 (interactive docs at /docs)
+streamlit run app/streamlit_app.py      # UI on http://localhost:8501
+```
+
+| Endpoint | Returns |
+| --- | --- |
+| `POST /recommend` | Ranked recommendations. The body is the preferences (`location`, `budget`, `cuisines`, `min_rating`, `online_order`, `book_table`, `party_size`, `free_text`) plus optional `top_n` (1-25) and `use_llm` (default `true`) |
+| `GET /meta/locations` | Area names for the dropdown |
+| `GET /meta/cuisines` | Cuisine names |
+| `GET /meta/budgets` | Each budget band's real rupee range and restaurant count |
+| `GET /health` | `catalog_loaded`, `rows`, `model`, `llm_configured` (503 until the catalog is loaded) |
+
+```bash
+curl -s localhost:8000/recommend -H 'content-type: application/json' \
+  -d '{"location": "Indiranagar", "budget": "high", "free_text": "family-friendly, quiet"}'
+```
+
+- **Startup:** the API loads the catalog before accepting requests. If the Parquet is missing it refuses to start and prints the ingest command. Restart it after a re-ingest. Each `--workers` process holds its own copy of the catalog.
+- **Errors:** every non-2xx response has the same shape, and no stack trace is ever returned; details go to the logs, matched by `request_id` (also sent as the `X-Request-ID` header):
+  ```json
+  {"error": {"code": "invalid_request", "message": "The request is invalid. See `details`.",
+             "details": [{"field": "min_rating", "message": "Input should be less than or equal to 5"}],
+             "request_id": "5fde33c1d8b74563"}}
+  ```
+- **UI:** reads `API_URL` (default `http://localhost:8000`). On each card the catalog facts (rating, cost, cuisines) are shown separately from the explanation. The explanation is labelled "AI explanation" only when the model wrote it, and "Why it matches" when it's a template. A widened search is listed above the results, a no-results page offers to rerun without the blocking filter, and a banner appears when AI ranking is unavailable.
+
 ## Tests
 
 Run from the repository root:

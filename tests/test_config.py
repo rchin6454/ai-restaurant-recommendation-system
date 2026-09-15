@@ -52,6 +52,7 @@ def test_defaults_match_architecture(clean_env):
     assert s.llm_timeout_s == 30
     assert s.enable_semantic_search is False
     assert s.catalog_path == PROJECT_ROOT / "data" / "processed" / "restaurants.parquet"
+    assert s.api_url == "http://localhost:8000"
     assert s.log_level == "INFO"
     assert s.llm_enabled is False
 

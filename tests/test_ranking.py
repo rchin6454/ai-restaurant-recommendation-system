@@ -172,6 +172,7 @@ def test_recommend_unknown_cuisine_and_impossible_query(cat):  # I-06, F-02
     impossible = recommend(Preferences(book_table=True), catalog=cat, config=CONFIG)
     assert impossible.outcome == "empty_with_reason" and impossible.recommendations == []
     assert "Blocking constraint: book table = yes" in impossible.summary
+    assert impossible.blocking_constraints == ["book_table"]  # U-05: the UI's one-click relaxation target
 
 
 def test_recommend_budget_stretch_is_flagged():

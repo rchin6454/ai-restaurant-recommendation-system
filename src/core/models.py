@@ -12,6 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 Budget = Literal["low", "medium", "high"]
 Outcome = Literal["results", "relaxed_results", "empty_with_reason", "coverage_error"]
+ConstraintName = Literal["location", "budget", "cuisines", "min_rating", "online_order", "book_table"]
 MAX_FREE_TEXT_CHARS = 500  # §13 / I-14
 
 
@@ -153,6 +154,9 @@ class RecommendationResponse(BaseModel):
     relaxations: list[Relaxation] = Field(default_factory=list)
     interpretations: list[Interpretation] = Field(default_factory=list)
     suggestions: list[str] = Field(default_factory=list)
+    # Empty pool only (F-02): constraints whose removal alone yields matches, most matches first.
+    # Lets the UI offer one-click relaxation (U-05) without parsing `summary`.
+    blocking_constraints: list[ConstraintName] = Field(default_factory=list)
     # True whenever explanations are templates rather than the LLM's (§5.6).
     degraded: bool
     candidates_considered: int = 0

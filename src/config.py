@@ -77,6 +77,7 @@ class Settings(BaseSettings):
 
     # --- paths & ops ---
     catalog_path: Path = Path("data/processed/restaurants.parquet")
+    api_url: str = "http://localhost:8000"  # where the Streamlit UI finds the API
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
 
     @field_validator("catalog_path")

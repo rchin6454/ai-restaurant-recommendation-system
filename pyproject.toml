@@ -19,6 +19,7 @@ dependencies = [
     "fastapi>=0.111",
     "uvicorn[standard]>=0.30",
     "streamlit>=1.36",
+    "httpx>=0.27",  # the Streamlit UI's API client; also FastAPI's TestClient
     "rapidfuzz>=3.9",
     "ftfy>=6.2",
 ]
@@ -26,7 +27,6 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest>=8.2",
-    "httpx>=0.27",  # FastAPI TestClient (phase 4)
 ]
 semantic = [
     "duckdb>=1.0",

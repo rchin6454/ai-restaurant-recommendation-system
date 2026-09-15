@@ -355,10 +355,25 @@ Stub the client; no network in CI. A shared fixture replaces the real client con
 Label the location field **"Area (Bengaluru)"** — this is where the §3.1 dataset-coverage decision becomes visible to the user.
 
 **Done when:**
-- `uvicorn src.api.main:app --reload` + `streamlit run app/streamlit_app.py`, and a full journey works in the browser
-- Every field required by the problem statement's §5 output spec appears on the card: name, cuisine, rating, estimated cost, AI explanation
-- No-results and degraded states both render correctly (force them to check)
-- `pytest tests/test_api.py` passes with a stubbed recommender
+- [x] `uvicorn src.api.main:app --reload` + `streamlit run app/streamlit_app.py`, and a full journey works in the browser
+- [x] Every field required by the problem statement's §5 output spec appears on the card: name, cuisine, rating, estimated cost, AI explanation
+- [x] No-results and degraded states both render correctly (force them to check)
+- [x] `pytest tests/test_api.py` passes with a stubbed recommender
+
+**Status: complete (2026-09-15)**
+- **Browser journey.** Headless Chrome ran against the real API and catalog: area and budget chosen, "family-friendly, quiet" typed, submitted. The submit button was disabled during the call (U-07), and 5 LLM-ranked cards arrived in ~6 s with `degraded=false`. Cards render correctly in light and dark themes.
+- **Live API.** `/meta/*` serves 93 areas, 105 cuisines and the phase 1 rupee bands. Invalid input returns the 422 envelope. A missing `CATALOG_PATH` stops startup with the ingest command in the error (A-01). Request logs carry a `request_id` and never the body.
+- **Tests.** 195 pass. `tests/test_api.py` covers A-01, A-03, A-04, A-08, A-11, A-12, I-11, I-12, I-14 and I-19. `tests/test_streamlit_app.py` uses Streamlit's AppTest against a fake API to force the unreachable-API, null-rating, null-cost, no-URL, no-results, degraded, widened-search and HTML-escaping states (U-01…U-06, U-10, U-11). The degraded and no-results states were forced there, not in a live browser.
+- **Additions beyond the task list.**
+  - `GET /meta/budgets` (the rupee bands for the budget radio).
+  - `blocking_constraints` on the response (for one-click relaxation, U-05).
+  - The `API_URL` setting.
+  - The error envelope, documented in architecture §7.
+
+**Carried into phase 5:**
+- **`/health` doesn't probe Groq.** It reports `llm_configured` only. An invalid key still shows up per request as `degraded` with `trace.fallback_reason` (A-09).
+- **Body size cap reads `Content-Length` only.** A chunked request without one isn't capped (A-12).
+- **Not yet done:** rate limiting (5.2, A-07), response caching (5.1), and the `run_eval --via-api` phase 4 eval gate (needs the 5.5 runner).
 
 ---
 
