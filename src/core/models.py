@@ -6,14 +6,19 @@ UI never have to be retrofitted.
 
 from __future__ import annotations
 
-from typing import Literal
+import re
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
 
 Budget = Literal["low", "medium", "high"]
 Outcome = Literal["results", "relaxed_results", "empty_with_reason", "coverage_error"]
 ConstraintName = Literal["location", "budget", "cuisines", "min_rating", "online_order", "book_table"]
 MAX_FREE_TEXT_CHARS = 500  # §13 / I-14
+MAX_CUISINE_CHARS = 60  # the longest catalog cuisine is ~20 characters (5.3)
+MAX_PARTY_SIZE = 100
+# C0 control characters except tab and newline, plus DEL: invisible in the UI, noise in the prompt (5.3).
+_CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
 
 
 class Preferences(BaseModel):
@@ -23,9 +28,11 @@ class Preferences(BaseModel):
 
     location: str | None = Field(None, max_length=100, description="Bengaluru area")
     budget: Budget | None = None  # I-12: anything else is a validation error
-    cuisines: list[str] = Field(default_factory=list, max_length=20)  # OR-matched
+    cuisines: list[Annotated[str, StringConstraints(max_length=MAX_CUISINE_CHARS)]] = Field(
+        default_factory=list, max_length=20
+    )  # OR-matched
     min_rating: float | None = Field(None, ge=0, le=5)  # I-11
-    party_size: int | None = Field(None, ge=1)  # I-20: context only, never filtered on
+    party_size: int | None = Field(None, ge=1, le=MAX_PARTY_SIZE)  # I-20: context only, never filtered on
     free_text: str | None = Field(None, max_length=MAX_FREE_TEXT_CHARS)
     online_order: bool | None = None
     book_table: bool | None = None
@@ -34,7 +41,7 @@ class Preferences(BaseModel):
     @classmethod
     def _blank_to_none(cls, v: object) -> object:  # I-13
         if isinstance(v, str):
-            v = v.strip()
+            v = _CONTROL_CHARS.sub("", v).strip()
             return v or None
         return v
 
@@ -49,10 +56,11 @@ class Preferences(BaseModel):
             return v
         seen: dict[str, str] = {}
         for item in v:
-            if isinstance(item, str) and item.strip():
-                seen.setdefault(item.strip().casefold(), item.strip())
-            elif not isinstance(item, str):
+            if not isinstance(item, str):
                 return v  # let pydantic report the bad element
+            item = _CONTROL_CHARS.sub("", item).strip()
+            if item:
+                seen.setdefault(item.casefold(), item)
         return list(seen.values())
 
 
@@ -140,6 +148,7 @@ class RankingTrace(BaseModel):
     completion_tokens: int = 0
     cost_usd: float | None = None  # None = no price known for this model
     llm_latency_ms: int = 0
+    rate_limit_wait_ms: int = 0  # queued behind the Groq rate limiter before the call; M-20 excludes it
     model_picks: int = 0  # picks the model returned, before the grounding gate
     dropped_ids: list[str] = Field(default_factory=list)  # G-07: unknown/duplicate IDs the gate removed
     backfilled: int = 0  # G-04: slots refilled from pre-ranked order
@@ -161,4 +170,5 @@ class RecommendationResponse(BaseModel):
     degraded: bool
     candidates_considered: int = 0
     latency_ms: int = 0
+    cached: bool = False  # served from the response cache (5.1)
     trace: RankingTrace | None = None  # None when no ranking ran (coverage error, empty pool)

@@ -338,7 +338,7 @@ The `/recommend` body is `Preferences` (§4.1) plus optional `top_n` and `use_ll
 
 `applied_filters` and `relaxations` are not optional polish — they are what makes the result legible when it isn't what the user expected. The full model is `RecommendationResponse` in `src/core/models.py`. Beyond the fields above, it carries `outcome`, `interpretations` (how typed values were matched), `suggestions`, `trace` (ranker, model, tokens, fallback reason), and, when nothing matches, `blocking_constraints`: the filters whose removal alone would yield results, which the UI turns into one-click relaxation.
 
-**Error envelope.** Every non-2xx response, whether validation (422), unknown route (404), oversized body (413), catalog not loaded (503) or unhandled error (500), has one shape. Stack traces and internal messages go to the logs only, matched by `request_id`:
+**Error envelope.** Every non-2xx response, whether validation (422), unknown route (404), oversized body (413), rate limited (429, with `retry_after_s` and a `Retry-After` header), catalog not loaded (503) or unhandled error (500), has one shape. Stack traces and internal messages go to the logs only, matched by `request_id`:
 
 ```json
 {"error": {"code": "invalid_request", "message": "The request is invalid. See `details`.",
@@ -424,6 +424,11 @@ All tunables in `src/config.py` via `pydantic-settings`, overridable by env var:
 | `rank_weights` | see §4.4 | Pre-ranking blend |
 | `llm_timeout_s` | 30 | Per-request timeout |
 | `enable_semantic_search` | `false` | Embedding path toggle |
+| `llm_requests_per_minute` / `_per_day` | 30 / 1,000 | Groq account limits for the model; calls are paced against them |
+| `llm_tokens_per_minute` / `_per_day` | 8,000 / 200,000 | The binding limits: a ranking call is ~6.3K tokens |
+| `llm_rate_limit_max_wait_s` | 10 | How long a call waits for capacity before degrading |
+| `response_cache_enabled` / `_ttl_s` / `_max_entries` | `true` / 3600 / 512 | Exact-match response cache (plan 5.1) |
+| `api_requests_per_minute` | 10 | Per-client limit on `POST /recommend` (plan 5.2) |
 
 ---
 

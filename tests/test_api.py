@@ -9,7 +9,7 @@ from __future__ import annotations
 import pytest
 from fastapi.testclient import TestClient
 
-from src.api.main import MAX_BODY_BYTES, create_app
+from src.api.main import MAX_BODY_BYTES, ClientRateLimiter, create_app
 from src.api.routes import CatalogInfo, budget_bands, get_recommender
 from src.config import load_settings, settings
 from src.core.models import RecommendationResponse
@@ -46,12 +46,12 @@ def calls() -> list:
     return []
 
 
-def app_with(catalog, calls, recommender=None):
+def app_with(catalog, calls, recommender=None, **app_kwargs):
     def real(prefs, top_n=None, *, use_llm=True):
         calls.append((prefs, top_n, use_llm))
         return recommend(prefs, top_n, catalog=catalog, config=CONFIG, use_llm=use_llm)
 
-    app = create_app(catalog_loader=lambda: info_for(catalog))
+    app = create_app(catalog_loader=lambda: info_for(catalog), **app_kwargs)
     app.dependency_overrides[get_recommender] = lambda: recommender or real
     return app
 
@@ -202,6 +202,29 @@ def test_oversized_body_is_rejected_before_parsing(client, calls):  # A-12
 def test_unknown_route_uses_the_envelope(client):
     assert_envelope(client.get("/nope"), 404, "not_found")
     assert_envelope(client.get("/recommend"), 405, "method_not_allowed")
+
+
+def test_recommend_is_rate_limited_per_client(catalog, calls):  # A-06, A-07, S-04
+    with TestClient(app_with(catalog, calls, requests_per_minute=2)) as client:
+        assert [client.post("/recommend", json={}).status_code for _ in range(2)] == [200, 200]
+        resp = client.post("/recommend", json={})
+        error = assert_envelope(resp, 429, "rate_limited")
+        assert 1 <= error["retry_after_s"] <= 60 and resp.headers["retry-after"] == str(error["retry_after_s"])
+        assert len(calls) == 2  # the limited request never reached the recommender
+        assert client.get("/meta/locations").status_code == 200  # only /recommend is limited
+
+
+def test_client_rate_limiter_window_slides():
+    now = [0.0]
+    limiter = ClientRateLimiter(2, clock=lambda: now[0], max_clients=2)
+    assert limiter.check("a") == 0 and limiter.check("a") == 0
+    now[0] = 20.0
+    assert limiter.check("a") == pytest.approx(40.0)
+    assert limiter.check("b") == 0  # clients are independent
+    now[0] = 60.5
+    assert limiter.check("a") == 0  # the t=0 calls have left the window
+    limiter.check("c")  # a third client evicts the least recently seen ("b")
+    assert set(limiter._calls) == {"a", "c"}
 
 
 def test_request_id_is_echoed_only_when_well_formed(client):

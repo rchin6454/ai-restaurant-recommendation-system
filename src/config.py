@@ -22,6 +22,7 @@ from typing import Literal
 from pydantic import (
     BaseModel,
     Field,
+    NonNegativeFloat,
     PositiveFloat,
     PositiveInt,
     SecretStr,
@@ -67,13 +68,27 @@ class Settings(BaseSettings):
     # --- §10 tunables (LLM served by Groq; implementation plan phase 3) ---
     groq_api_key: SecretStr | None = None
     model: str = "openai/gpt-oss-120b"  # or "qwen/qwen3.6-27b"; per-model params in src/llm/client.py
-    llm_candidate_k: PositiveInt = 25
+    llm_candidate_k: int = Field(25, ge=1, le=100)  # O-03: every candidate is prompt tokens
     default_top_n: PositiveInt = 5
     min_candidates: PositiveInt = 10
     max_chain_outlets: PositiveInt = 2
     rank_weights: RankWeights = RankWeights()
     llm_timeout_s: PositiveFloat = 30.0
     enable_semantic_search: bool = False
+
+    # --- Groq account rate limits for `model` (console → Settings → Limits); see src/llm/rate_limit.py ---
+    llm_requests_per_minute: PositiveInt = 30
+    llm_requests_per_day: PositiveInt = 1000
+    llm_tokens_per_minute: PositiveInt = 8000
+    llm_tokens_per_day: PositiveInt = 200_000
+    # A call that won't fit waits this long for capacity, then degrades to the deterministic ranker.
+    llm_rate_limit_max_wait_s: NonNegativeFloat = 10.0
+
+    # --- response cache (plan 5.1) and API rate limiting (plan 5.2) ---
+    response_cache_enabled: bool = True
+    response_cache_ttl_s: PositiveFloat = 3600.0
+    response_cache_max_entries: PositiveInt = 512
+    api_requests_per_minute: PositiveInt = 10  # per client address, POST /recommend only
 
     # --- paths & ops ---
     catalog_path: Path = Path("data/processed/restaurants.parquet")

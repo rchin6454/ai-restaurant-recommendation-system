@@ -13,9 +13,20 @@ from src.config import RankWeights, load_settings
 from src.core.filters import Constraints
 from src.core.models import Preferences, Relaxation
 from src.core.ranking import pre_rank
-from src.llm.client import LLMUnavailable, call_budget, profile_for
+from src.core.recommender import recommend
+from src.llm.client import GroqClient, LLMUnavailable, call_budget, profile_for
 from src.llm.prompts import RANKING_SYSTEM_PROMPT
-from src.llm.ranker import RESPONSE_SCHEMA, RankedOutput, RankedPick, build_messages, llm_rank, serialize_candidates
+from src.llm.rate_limit import limiter_for
+from src.llm.ranker import (
+    COMPLETION_TOKEN_RESERVE,
+    RESPONSE_SCHEMA,
+    RankedOutput,
+    RankedPick,
+    build_messages,
+    estimate_tokens,
+    llm_rank,
+    serialize_candidates,
+)
 from tests.factories import make_catalog, restaurant
 from tests.llm_stubs import StubClient, completion, picks_json
 
@@ -193,3 +204,59 @@ def test_call_cap_stops_a_runaway_loop():  # L-24
     with pytest.raises(LLMUnavailable, match="cap of 2"):
         llm_rank(cands, Preferences(), 5, config=GPT_OSS, client=stub)
     assert len(stub.calls) == 2
+
+
+# --- Groq rate limits (src/llm/rate_limit.py) -----------------------------------------------------
+
+
+def test_token_estimate_over_counts_the_prompt_and_reserves_completion():
+    messages = build_messages(candidates(), Preferences(), 5)
+    chars = sum(len(m["content"]) for m in messages)
+    assert estimate_tokens(messages) >= chars / 3.28 + COMPLETION_TOKEN_RESERVE  # 3.28 chars/token measured live
+
+
+def test_rate_limiter_is_charged_real_usage_after_the_call():
+    cands = candidates()
+    stub = StubClient(completion(picks_json(first_id(cands)), prompt_tokens=3900, completion_tokens=2400))
+    llm_rank(cands, Preferences(), 5, config=GPT_OSS, client=stub)
+    assert limiter_for(GPT_OSS).usage() == {"requests_last_minute": 1, "tokens_last_minute": 6300,
+                                            "requests_last_day": 1, "tokens_last_day": 6300}
+
+
+def test_a_call_that_would_exceed_the_limit_is_never_sent():
+    config = load_settings(_env_file=None, groq_api_key="gsk_test", llm_rate_limit_max_wait_s=0)
+    cands = candidates()
+    stub = StubClient(completion(picks_json(first_id(cands)), prompt_tokens=3900, completion_tokens=2400))
+    llm_rank(cands, Preferences(), 5, config=config, client=stub)
+    with pytest.raises(LLMUnavailable, match="8,000 tokens per minute would be exceeded"):
+        llm_rank(cands, Preferences(), 5, config=config, client=stub)
+    assert len(stub.calls) == 1
+
+
+def test_groq_429_pauses_calls_for_retry_after():  # L-04
+    cands = candidates()
+    limited = groq.RateLimitError(
+        "rate limited", response=httpx.Response(429, headers={"retry-after": "42"}, request=REQUEST), body=None)
+    with pytest.raises(LLMUnavailable, match="paused for 42 s"):
+        llm_rank(cands, Preferences(), 5, config=GPT_OSS, client=StubClient(limited))
+    healthy = StubClient(completion(picks_json(first_id(cands))))
+    with pytest.raises(LLMUnavailable, match="429"):
+        llm_rank(cands, Preferences(), 5, config=GPT_OSS, client=healthy)
+    assert healthy.calls == []
+
+
+def test_groq_client_fails_fast_on_429_but_still_retries_server_errors():
+    sdk = GroqClient(api_key="gsk_test")
+    assert sdk._should_retry(httpx.Response(429, request=REQUEST)) is False
+    assert sdk._should_retry(httpx.Response(503, request=REQUEST)) is True
+    assert sdk._should_retry(httpx.Response(400, request=REQUEST)) is False
+
+
+def test_rate_limited_request_degrades_with_the_reason():
+    cat = make_catalog([restaurant(i, votes=1000 - i) for i in range(12)])
+    config = load_settings(_env_file=None, groq_api_key="gsk_test", llm_tokens_per_minute=1000)
+    stub = StubClient(completion(picks_json("r_000000000000")))
+    r = recommend(Preferences(), catalog=cat, config=config, llm_client=stub)
+    assert r.degraded and r.trace.ranker == "deterministic" and len(r.recommendations) == 5
+    assert "Groq rate limit" in r.trace.fallback_reason and "1,000 tokens per minute" in r.trace.fallback_reason
+    assert stub.calls == []

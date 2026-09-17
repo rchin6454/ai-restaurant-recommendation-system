@@ -325,7 +325,11 @@ Stub the client; no network in CI. A shared fixture replaces the real client con
 **Carried into phase 5:**
 - **Candidate recall for free text (M-13, M-14).** The top-25 shortlist ignores `free_text`. Where the pool lacks the right kind of restaurant (Indiranagar at a medium budget: 5 casual-dining places among 141, ranked 23rd and 93rd onward), the LLM has nothing better to promote. Capping how many of one restaurant type make the shortlist was simulated and rejected: it didn't help there, and it cut Koramangala's casual-dining candidates from 11 to 5. Candidates for tuning: the §4.4 free-text blend.
 - **Ungrounded prose (L-19/L-20, M-19).** One "buffet" claim still appeared after the rule was added; it comes from the model's general knowledge. Measure the rate in the eval, and consider the optional explanation audit.
-- **Rate limit.** The account allows 8,000 tokens per minute and one ranking call uses ~5K. Back-to-back calls stall for 13-38 s while the SDK waits out the limit, so live eval runs must be paced about 45 s apart (or run on a paid tier). Otherwise latency (M-20) measures throttling, not the model.
+- **Rate limit (pacing added 2026-09-15).** The account's `openai/gpt-oss-120b` limits are 30 requests/min, 1,000 requests/day, 8,000 tokens/min and 200,000 tokens/day. One ranking call measured 6.3K tokens, so tokens bind: ~1 call/min, ~31/day.
+  - **Pacing.** [src/llm/rate_limit.py](../src/llm/rate_limit.py) reserves an estimate against all four limits before each call and corrects it to real usage afterwards. It waits up to `LLM_RATE_LIMIT_MAX_WAIT_S` (10 s) for capacity, then degrades with the reason in `trace.fallback_reason`.
+  - **429s.** `GroqClient` no longer retries a 429, which caused the old 13-38 s stalls. A 429 pauses calls for its `retry-after`.
+  - **For the eval.** Live runs must still be paced about one call a minute (for example `LLM_RATE_LIMIT_MAX_WAIT_S=70`, so calls queue instead of degrading), and the ~31-calls/day budget caps how many live queries a day can run. Otherwise latency (M-20) measures throttling, not the model.
+  - **Not covered.** The eval runner and LLM judge (5.5, 5.9) must share the limiter, and limits aren't coordinated across processes.
 
 **Budget note:** Groq is roughly 15× cheaper per query than the §5.5 Claude estimate, but a loop bug still spends real money. The CLI enforces a hard cap on LLM calls per run (`--max-llm-calls`, default 3); past it, the call degrades instead of spending.
 
@@ -408,9 +412,36 @@ Label the location field **"Area (Bengaluru)"** — this is where the §3.1 data
 **5.8** — deliberately break things and confirm graceful behavior: unset the API key, point `catalog_path` at a missing file, send a 10K-character `free_text`, send an unknown location, simulate a timeout.
 
 **Done when:**
-- Eval runs clean: 0 grounding violations, constraint satisfaction above your chosen bar
-- Every failure drill degrades gracefully with a clear user-facing message
-- README lets someone clone the repo and reach a working UI following only its instructions
+- [ ] Eval runs clean: 0 grounding violations, constraint satisfaction above your chosen bar. *0 grounding violations and 100% constraint satisfaction in every run, but the live smoke run fails M-07 on `ft-01`, and the full 30-query live run hasn't been run (it needs about 2.5 days of Groq token budget)*
+- [x] Every failure drill degrades gracefully with a clear user-facing message
+- [ ] README lets someone clone the repo and reach a working UI following only its instructions. *Quick start written; not yet tried from a fresh clone*
+
+**Status: built; eval partly green (2026-09-15)**
+- **5.1-5.3.**
+  - Response cache: 1 h TTL, 512 entries. Transient fallbacks aren't cached, and a response served from the cache says `cached: true`.
+  - Per-client 429 on `POST /recommend`, with `retry_after_s`.
+  - Input bounds on cuisine length, party size and `LLM_CANDIDATE_K`; control characters stripped.
+- **5.4.** 30 labelled queries matching [eval.md](eval.md) §3.1, 15 of them with gold IDs, all labels checked against the catalog (`--check-labels`).
+- **5.5.** `run_eval` supports deterministic, LLM, `--via-api` and forced-failure modes, plus `--judge`, `--pairwise`, `--ids`, `--resume`, `--save-baseline` and `--max-calls`. It waits out short Groq 429s and saves the run as incomplete on long ones. `compare` refuses invalid runs and lists per-query flips.
+- **5.8.** `python -m evals.failure_drill` covers 11 scenarios, including a key unset, timeout, 429, malformed output, daily budget spent, missing catalog, 10K free text, Delhi, malformed JSON, a request flood, and the UI with the API down. All pass; the report is in `evals/results/drill_*.md`.
+- **5.9.** Frozen judge and pairwise prompts go through the ranker's guarded call path. The calibration CLI (`export-sheet`, `calibrate`) is built, but **calibration itself needs 15 hand-scored picks and hasn't been done**, so M-15 isn't trusted yet.
+- **5.6.** No weight or prompt change accepted; see [evals/results/CHANGELOG.md](../evals/results/CHANGELOG.md).
+- **Runs:**
+
+  | Run | Result |
+  | --- | --- |
+  | Deterministic, 30 queries (saved as the baseline) | All blocking metrics pass. M-13 100%. M-14 35% (by design) |
+  | Forced LLM failure | M-24 100% (30/30) |
+  | Live smoke, 7 queries with judge and pairwise | M-01 = 0, M-19 = 0, M-17 lift 4/4, M-14 94%, $0.0015/query. **M-07 fails on `ft-01`**, M-15 3.92 (8 ungrounded-prose picks), M-23 0/7, M-20 p95 6.1 s |
+
+- **Tests:** 286 pass.
+
+**Open:**
+- **Free-text candidate recall (M-07 `ft-01`).** The shortlist ignores free text, so a citywide "quick lunch" query shortlists Casual Dining and bars. Candidates: §4.4's embedding blend, or a catalog-field blend, measured deterministically first.
+- **Ungrounded prose (M-15).** The model still claims facilities and atmosphere that aren't in the row, including one false "allows table booking". Next: tighten the prompt, validated with `--repeat 2`, and consider a code check for boolean facility claims.
+- **Judge calibration.** Hand-score 15 picks. Known judge issues first: it penalises ignoring injected instructions and treats "craft beer" as ungrounded for a Microbrewery.
+- **M-23 cross-query caching** stays at 0 while the static prefix is only the system prompt; decide whether to re-baseline the target or restructure the prefix.
+- **Full live runs** need `--resume` across days at ~31 calls/day, or a paid Groq tier.
 
 ---
 

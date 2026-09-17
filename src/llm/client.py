@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from functools import lru_cache
 
 import groq
+import httpx
 
 from src.config import Settings, get_logger
 from src.core.models import RankingTrace
@@ -82,10 +83,22 @@ def estimate_cost_usd(profile: ModelProfile, prompt_tokens: int, cached_tokens: 
     return round(usd, 6)
 
 
+class GroqClient(groq.Groq):
+    """`groq.Groq` that doesn't retry 429s.
+
+    The SDK answers a 429 by sleeping out Groq's reset and retrying, which at 8K tokens/min meant
+    13-38 s stalls. `src.llm.rate_limit` already paces calls, so a 429 fails fast, pauses further
+    calls for `retry-after`, and the request degrades. Other retries (408, 409, 5xx, connection) stay.
+    """
+
+    def _should_retry(self, response: httpx.Response) -> bool:
+        return response.status_code != 429 and super()._should_retry(response)
+
+
 @lru_cache(maxsize=4)
 def _client(api_key: str, timeout_s: float) -> groq.Groq:
     # Built once per key, not per request. `max_retries` stays at the SDK default of 2 (L-07).
-    return groq.Groq(api_key=api_key, timeout=timeout_s)
+    return GroqClient(api_key=api_key, timeout=timeout_s)
 
 
 def get_client(config: Settings) -> groq.Groq:

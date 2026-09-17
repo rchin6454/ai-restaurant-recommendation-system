@@ -2,6 +2,13 @@
 
 Restaurant recommendations over the Zomato Bangalore dataset, filtered deterministically and ranked and explained by an LLM served by [Groq](https://console.groq.com). See [docs/architecture.md](docs/architecture.md) and [docs/implementation-plan.md](docs/implementation-plan.md).
 
+## Quick start (clean clone → working UI)
+
+1. [Setup](#setup): create the venv, `pip install -e ".[dev]"`, `cp .env.example .env`, and add `GROQ_API_KEY` (optional; without it results are ranked without AI).
+2. Build the catalog: `python -m src.data.ingest` (downloads ~550 MB once).
+3. Terminal 1: `uvicorn src.api.main:app`
+4. Terminal 2: `streamlit run app/streamlit_app.py`, then open http://localhost:8501.
+
 ## Setup
 
 Requires Python 3.11+.
@@ -78,6 +85,11 @@ MODEL=qwen/qwen3.6-27b python -m src.cli --location Koramangala --cuisine Italia
 - **Grounding:** IDs the model returns that aren't in the candidate set are dropped, logged and backfilled; duplicates, odd ranks and ID casing are normalized.
 - **Degraded mode:** with no key, a Groq error, a truncated or malformed response, or no valid pick, the deterministic ranker answers and the response says `degraded: true` with the reason in `trace.fallback_reason`.
 - **Cost and caching:** the CLI header shows tokens, cached tokens and estimated cost. Run the same query twice; the second should report cached tokens. `--max-llm-calls` (default 3) caps paid calls per run.
+- **Rate limits:** LLM calls are paced against the Groq account's limits for the model: `LLM_REQUESTS_PER_MINUTE=30`, `LLM_REQUESTS_PER_DAY=1000`, `LLM_TOKENS_PER_MINUTE=8000`, `LLM_TOKENS_PER_DAY=200000`.
+  - **Tokens bind first.** A ranking call is ~6.3K tokens, so about one LLM-ranked answer fits per minute and ~31 per day.
+  - **Before each call** the tokens are estimated and checked against all four limits. A call that doesn't fit waits up to `LLM_RATE_LIMIT_MAX_WAIT_S` (10 s) for capacity. Otherwise it's answered by the deterministic ranker with `degraded: true`, and `trace.fallback_reason` says which limit applied.
+  - **A 429 from Groq isn't retried.** It pauses LLM calls for its `retry-after`.
+  - **Usage is tracked per process.** Running the CLI while the API is up, or several API workers, on one key isn't coordinated; those collisions show up as 429s and degrade the same way.
 
 ## API and UI (phase 4)
 
@@ -109,6 +121,27 @@ curl -s localhost:8000/recommend -H 'content-type: application/json' \
              "request_id": "5fde33c1d8b74563"}}
   ```
 - **UI:** reads `API_URL` (default `http://localhost:8000`). On each card the catalog facts (rating, cost, cuisines) are shown separately from the explanation. The explanation is labelled "AI explanation" only when the model wrote it, and "Why it matches" when it's a template. A widened search is listed above the results, a no-results page offers to rerun without the blocking filter, and a banner appears when AI ranking is unavailable.
+
+## Hardening and evaluation (phase 5)
+
+- **Response cache:** identical requests within an hour (`RESPONSE_CACHE_TTL_S`) are answered without a new LLM call; responses say `cached: true`. Answers that fell back because of a timeout, a 429 or the rate limiter aren't cached, so they can't pin template explanations.
+- **API rate limit:** `POST /recommend` allows `API_REQUESTS_PER_MINUTE` (10) per client address, then returns 429 with `retry_after_s` and a `Retry-After` header. Behind a reverse proxy every user shares one address, so size the limit for that.
+- **Input limits:** free text ≤ 500 characters, cuisine names ≤ 60, party size ≤ 100, `LLM_CANDIDATE_K` ≤ 100; control characters are stripped.
+
+The eval ([docs/eval.md](docs/eval.md)) scores 30 labelled queries in [evals/queries.jsonl](evals/queries.jsonl). Results land in `evals/results/`: a JSONL file per run plus a Markdown scorecard.
+
+```bash
+python -m evals.run_eval --mode deterministic --save-baseline      # free: all 30 queries, writes the baseline
+python -m evals.run_eval --mode llm --force-llm-failure            # free: proves the fallback path (M-24)
+python -m evals.run_eval --mode llm --ids ft-01,ft-02,ft-03,ft-04,con-01,thin-01,adv-01 --judge --pairwise   # live smoke
+python -m evals.compare evals/results/<before>.jsonl evals/results/<after>.jsonl   # metric deltas + per-query flips
+python -m evals.failure_drill                                      # 5.8: breaks things on purpose, no tokens spent
+python -m evals.run_eval --check-labels                            # after a re-ingest
+```
+
+- **Live runs cost tokens, not much money.** Groq limits the account to 8K tokens/min and 200K/day; a ranking call is ~6.3K and a judge call ~3-4K. A run paces itself to about one ranking call a minute, a full 30-query `--mode llm` run uses about a day's tokens, and the full `--judge --pairwise` run takes ~2.5 days of budget. If a limit stops a run, it's saved as incomplete; rerun with `--resume <file>`.
+- **Judge calibration:** before trusting M-15, export a blind sheet, score its 15 picks by hand, then compare: `python -m evals.judge export-sheet --run <llm run> --queries ft-02,con-01,adv-01`, fill in the scores, and `python -m evals.judge calibrate --run <llm run> --sheet evals/results/calibration_sheet.csv`.
+- **Tuning log:** accepted weight and prompt changes are recorded, with the run that justified them, in [evals/results/CHANGELOG.md](evals/results/CHANGELOG.md).
 
 ## Tests
 

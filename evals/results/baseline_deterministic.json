@@ -1,0 +1,300 @@
+{
+  "run_id": "2026-09-15T17-23-23_deterministic",
+  "snapshot": {
+    "type": "run",
+    "run_id": "2026-09-15T17-23-23_deterministic",
+    "mode": "deterministic",
+    "forced_failure": false,
+    "via_api": null,
+    "flags": {
+      "judge": false,
+      "pairwise": false,
+      "repeat": 1,
+      "category": null,
+      "limit": null,
+      "max_calls": 150
+    },
+    "model": "openai/gpt-oss-120b",
+    "rank_weights": {
+      "rating": 0.45,
+      "votes": 0.2,
+      "cuisine": 0.2,
+      "budget": 0.15
+    },
+    "llm_candidate_k": 25,
+    "min_candidates": 10,
+    "max_chain_outlets": 2,
+    "ranking_prompt_sha256": "8054a760d537e67c202e346f07dd403ae212857828988065fff7b75280f3bd71",
+    "judge_prompt_sha256": null,
+    "queries_sha256": "fdb2b7f39c62c5f18345adb7c42727c0b0d47f27fdc4f8bd0db38ad5c381f1fa",
+    "catalog_rows": 12449,
+    "git_commit": "ac51f25+dirty",
+    "started_at": "2026-09-15T17:23:23+00:00"
+  },
+  "metrics": {
+    "M-10": 0.9076923076923077,
+    "M-11": 1.0,
+    "M-13": 1.0,
+    "M-14": 0.35
+  },
+  "queries": {
+    "ord-01": {
+      "pick_ids": [
+        "r_20190952f7d5",
+        "r_c9cdce9847b7",
+        "r_639c93350f55",
+        "r_0c5aeae63331",
+        "r_f773647a0100"
+      ]
+    },
+    "ord-02": {
+      "pick_ids": [
+        "r_cf3ae524e071",
+        "r_d76efdb7fe81",
+        "r_831068232828",
+        "r_e7f3a7478300",
+        "r_aaa894e8988a"
+      ]
+    },
+    "ord-03": {
+      "pick_ids": [
+        "r_7bad889072a7",
+        "r_40836037efbb",
+        "r_b72164744464",
+        "r_af46025b21e0",
+        "r_55c996640e19"
+      ]
+    },
+    "ord-04": {
+      "pick_ids": [
+        "r_728254c4ed43",
+        "r_f38be3db4532",
+        "r_41f8170022ed",
+        "r_a9c5e6c88b21",
+        "r_1d20f639266b"
+      ]
+    },
+    "ord-05": {
+      "pick_ids": [
+        "r_b1bf809b8689",
+        "r_76ad4efb4cf8",
+        "r_9a20794fcc9f",
+        "r_ecb99ff39030",
+        "r_9726983ca888"
+      ]
+    },
+    "ord-06": {
+      "pick_ids": [
+        "r_44a5c770753a",
+        "r_338b55ca6f05",
+        "r_5350d2dfa1a4",
+        "r_232e2a500607",
+        "r_dc930baed9f0"
+      ]
+    },
+    "ord-07": {
+      "pick_ids": [
+        "r_063bdfa841b1",
+        "r_ed1118de068d",
+        "r_dabf384eacf4",
+        "r_3b1897c8a98c",
+        "r_c6e3b46ffbf3"
+      ]
+    },
+    "ord-08": {
+      "pick_ids": [
+        "r_5d4ffd8e235d",
+        "r_c224792b21a4",
+        "r_beb3841febad",
+        "r_05d2ec63ec35",
+        "r_cb5daf6275a6"
+      ]
+    },
+    "oc-01": {
+      "pick_ids": [
+        "r_82983a600f9d",
+        "r_628bda7f335e",
+        "r_1e644e3f4a2b",
+        "r_063bdfa841b1",
+        "r_eb9c795363a3"
+      ]
+    },
+    "oc-02": {
+      "pick_ids": [
+        "r_2e75ee2835f4",
+        "r_1e8d658861e3",
+        "r_931a143c203e",
+        "r_efc9a7cb9aaa",
+        "r_d124315f1909"
+      ]
+    },
+    "oc-03": {
+      "pick_ids": [
+        "r_3dceea065fa9",
+        "r_31c2bf41835a",
+        "r_a394c4945f89",
+        "r_038c06d3dfff",
+        "r_e20599bef350"
+      ]
+    },
+    "oc-04": {
+      "pick_ids": [
+        "r_2e75ee2835f4",
+        "r_1e8d658861e3",
+        "r_d124315f1909",
+        "r_7988d9d62a05",
+        "r_19f039c427db"
+      ]
+    },
+    "thin-01": {
+      "pick_ids": [
+        "r_ecd438bd6ea3",
+        "r_548e6f4b1f3b",
+        "r_82983a600f9d",
+        "r_628bda7f335e",
+        "r_063bdfa841b1"
+      ]
+    },
+    "thin-02": {
+      "pick_ids": [
+        "r_9624c3771547",
+        "r_82983a600f9d",
+        "r_628bda7f335e",
+        "r_063bdfa841b1",
+        "r_ed1118de068d"
+      ]
+    },
+    "con-01": {
+      "pick_ids": [
+        "r_2e75ee2835f4",
+        "r_1e8d658861e3",
+        "r_d124315f1909",
+        "r_7988d9d62a05",
+        "r_19f039c427db"
+      ]
+    },
+    "con-02": {
+      "pick_ids": [
+        "r_82983a600f9d",
+        "r_628bda7f335e",
+        "r_063bdfa841b1",
+        "r_ed1118de068d",
+        "r_cf3ae524e071"
+      ]
+    },
+    "con-03": {
+      "pick_ids": [
+        "r_e21348c2e07b",
+        "r_6529c829d345",
+        "r_103f98f25730",
+        "r_81c98041a5a1",
+        "r_046d0d08c56b"
+      ]
+    },
+    "ft-01": {
+      "pick_ids": [
+        "r_82983a600f9d",
+        "r_628bda7f335e",
+        "r_063bdfa841b1",
+        "r_ed1118de068d",
+        "r_cf3ae524e071"
+      ]
+    },
+    "ft-02": {
+      "pick_ids": [
+        "r_cf3ae524e071",
+        "r_931a143c203e",
+        "r_f30a10b3cbb4",
+        "r_d76efdb7fe81",
+        "r_831068232828"
+      ]
+    },
+    "ft-03": {
+      "pick_ids": [
+        "r_5d4ffd8e235d",
+        "r_c224792b21a4",
+        "r_beb3841febad",
+        "r_05d2ec63ec35",
+        "r_cb5daf6275a6"
+      ]
+    },
+    "ft-04": {
+      "pick_ids": [
+        "r_d1aae414140e",
+        "r_a7db43513c80",
+        "r_d8b86ec2244e",
+        "r_41e7127afbdf",
+        "r_e9f0c0b35968"
+      ]
+    },
+    "ooc-01": {
+      "pick_ids": []
+    },
+    "ooc-02": {
+      "pick_ids": []
+    },
+    "fz-01": {
+      "pick_ids": [
+        "r_c224792b21a4",
+        "r_3f2fd3e8b625",
+        "r_10c98b850690",
+        "r_5ec476654710",
+        "r_2aa370d78b65"
+      ]
+    },
+    "fz-02": {
+      "pick_ids": [
+        "r_d1aae414140e",
+        "r_a7db43513c80",
+        "r_41e7127afbdf",
+        "r_64ff53264466",
+        "r_3e10941ccfcd"
+      ]
+    },
+    "adv-01": {
+      "pick_ids": [
+        "r_eaf8f4a4ee7f",
+        "r_5c1e7ba6c9a2",
+        "r_867445f16699",
+        "r_e21348c2e07b",
+        "r_372df9ae74e7"
+      ]
+    },
+    "adv-02": {
+      "pick_ids": [
+        "r_628bda7f335e",
+        "r_0b45883c627b",
+        "r_c5e98fdc1375",
+        "r_319df7fe0366",
+        "r_fcbe3c2f08bb"
+      ]
+    },
+    "adv-03": {
+      "pick_ids": [
+        "r_eaf8f4a4ee7f",
+        "r_5c1e7ba6c9a2",
+        "r_867445f16699",
+        "r_e21348c2e07b",
+        "r_372df9ae74e7"
+      ]
+    },
+    "empty-01": {
+      "pick_ids": [
+        "r_82983a600f9d",
+        "r_628bda7f335e",
+        "r_063bdfa841b1",
+        "r_ed1118de068d",
+        "r_cf3ae524e071"
+      ]
+    },
+    "nulls-01": {
+      "pick_ids": [
+        "r_63e6c4882d76",
+        "r_f2c07488dd4f",
+        "r_3759e9fb8b35",
+        "r_1e7f69821f68",
+        "r_256ad9f3d5ce"
+      ]
+    }
+  }
+}

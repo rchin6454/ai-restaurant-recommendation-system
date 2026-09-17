@@ -49,10 +49,10 @@ M-03, M-06, and M-07 should hold *by construction* — the LLM only reorders can
 | ID | Metric | Definition | Threshold | Tier |
 | --- | --- | --- | --- | --- |
 | **M-19** | Unexpected degraded rate | Responses with `degraded=true` in a live-LLM run with a valid key ÷ responses. **If > 0, the run is invalid** — you measured the fallback, not the model | **= 0** | Blocking (run validity) |
-| M-20 | Latency p50 / p95 | End-to-end `latency_ms`, response cache disabled | p95 ≤ 6 s (design target ~4 s, §12) | Target |
+| M-20 | Latency p50 / p95 | End-to-end `latency_ms` minus `trace.rate_limit_wait_ms` (time queued behind the Groq rate limiter), response cache disabled | p95 ≤ 6 s (design target ~4 s, §12) | Target |
 | M-21 | Retrieval latency p95 | Filter + pre-rank only | ≤ 50 ms | Target |
-| M-22 | Cost per query | `(input × $5 + output × $25) / 1M`, with cache reads priced at 0.1× (§5.5) | mean ≤ $0.04 | Target |
-| M-23 | Prompt cache hit | Queries after the first with `cache_read_input_tokens > 0` ÷ queries after the first | ≥ 90% | Target |
+| M-22 | Cost per query | `trace.cost_usd` at Groq `openai/gpt-oss-120b` prices ($0.15 input, $0.075 cached input, $0.60 output per 1M tokens) | mean ≤ $0.004 (re-baselined from the Claude-era $0.04; phase 3 measured $0.0012-0.0019) | Target |
+| M-23 | Prompt cache hit | Queries after the first with `trace.cached_tokens > 0` ÷ queries after the first | ≥ 90% | Target |
 | M-24 | Degraded-path validity | Suite run with the LLM forced to fail: responses that are schema-valid, have `degraded=true`, and pass M-01/M-03/M-06 ÷ responses | = 100% | Blocking (phase 5) |
 
 ---
@@ -201,7 +201,10 @@ Field rules:
 | `outcome` | One of `results`, `relaxed_results`, `empty_with_reason`, `coverage_error` → scored by M-07 |
 | `acceptable` | Predicates evaluated against the **catalog row** of each pick → M-10. Deliberately looser than `prefs`, so that a reasonable neighboring pick is not marked wrong |
 | `free_text_signals` | Catalog-checkable stand-ins for fuzzy intent → M-14. A pick matches if it satisfies **any** listed signal |
-| `relaxation` | `{"expected": true, "first_field": "min_rating"}` for over-constrained queries → M-07 and the ladder-order check |
+| `relaxation` | `{"expected": true, "first_field": "min_rating"}` for over-constrained queries → M-07 and the ladder-order check. `first_field` is the first *ladder* step (step ≥ 1); the §4.2 budget stretch (step 0) is not a ladder step and is ignored |
+| `min_picks` | Fewest picks a correct response has (0 for `coverage_error`) → M-07 |
+| `interpretations` | Fuzzy or alias resolutions the response must report, e.g. `{"location": "Koramangala"}` → M-07 |
+| `caveat_required` | The response must name a conflict or thin fit → M-16 (judge) |
 | `gold_ids` | Restaurants a knowledgeable local would clearly put in the top 5 → M-11, M-13. Optional; aim for 2-3 on at least 15 queries |
 | `forbidden_ids` | Restaurants that must never appear (e.g. the known wrong-cuisine outlet with a similar name) → M-12 |
 | `forbidden_strings` | Text that must not appear anywhere in the response, e.g. `"Hotel Fictional"` → M-08 |
@@ -252,7 +255,7 @@ It also returns one query-level boolean, `conflict_acknowledged`, for M-16.
 
 Implementation notes:
 
-- Use `client.messages.parse()` with a Pydantic score schema, as in the ranker (§5.4). Keep the judge's system prompt as a frozen module-level constant in `evals/judge_prompts.py`, so the cache prefix stays stable across the 30 calls.
+- Call Groq through `src.llm.ranker.structured_completion`, the ranker's own guarded path, with a strict `json_schema` and a Pydantic model to validate against. Judge calls therefore share the ranker's key check, call cap and rate limiter. Keep the judge's system prompt as a frozen module-level constant in `evals/judge_prompts.py`, so the cache prefix stays stable across calls.
 - **Self-preference bias:** the judge and the ranker are the same model family. Mitigations: the judge grades against catalog rows rather than its own opinion of the restaurant, the rubric is anchored, and the judge is calibrated against human labels before anyone trusts it (below).
 - **Calibration, done once and repeated whenever the judge prompt or judge model changes:** hand-score 15 picks (3 queries × 5 picks) blind, then run the judge on the same picks. Requirements: agreement within ±1 on ≥ 80% of scores, and the judge must catch **every** pick you marked ungrounded. If calibration fails, fix the judge prompt, not the thresholds.
 
@@ -297,7 +300,8 @@ python -m evals.run_eval \
   [--via-api URL] \
   [--force-llm-failure] \
   [--check-labels] \
-  [--max-calls 150]
+  [--max-calls 150] \
+  [--ids ft-01,con-01] [--resume RUN.jsonl] [--save-baseline]
 ```
 
 | Flag | Behavior |
@@ -308,6 +312,11 @@ python -m evals.run_eval \
 | `--via-api` | Sends requests to a running FastAPI instance instead of importing `recommend()` (phase 4 gate) |
 | `--force-llm-failure` | Injects a client that raises `APIError` (M-24) |
 | `--max-calls` | Hard cap on total API calls (ranker + judge) across the run; aborts before exceeding it (L-24) |
+| `--ids` | Runs only the listed queries, e.g. a live smoke set that fits the daily token budget (§8) |
+| `--resume` | Continues an incomplete run file. Refuses if the model, weights, prompt, query set or catalog changed since it started |
+| `--save-baseline` | Writes `baseline_deterministic.json` from a complete `--mode deterministic` run |
+
+In `llm` mode the runner waits up to 90 s per call for the Groq rate limiter instead of degrading, because a degraded response makes the run invalid. If a limit still can't be met (usually the daily one), it stops, saves the run as incomplete, and prints the `--resume` command. For `--via-api`, start the API so it neither throttles nor degrades the eval: `LLM_RATE_LIMIT_MAX_WAIT_S=90 API_REQUESTS_PER_MINUTE=60 RESPONSE_CACHE_ENABLED=false uvicorn src.api.main:app`.
 
 ### 5.2 Rules the runner enforces
 
@@ -399,7 +408,7 @@ The summary file renders this table for every run. A release candidate needs a g
 | M-16 Honesty on conflict | ≥ 90% | Target |
 | M-17 Lift over baseline | ≥ 65% overall, ≥ 75% `free_text` | Target |
 | M-20 Latency p95 | ≤ 6 s | Target |
-| M-22 Cost per query | ≤ $0.04 | Target |
+| M-22 Cost per query | ≤ $0.004 | Target |
 | M-23 Prompt cache hit | ≥ 90% | Target |
 | M-02, M-18, M-21 | — | Tracked |
 
@@ -418,6 +427,19 @@ Together with the failure drill (5.8) and a clean-clone README check, this score
 | `--repeat 2` variant of the above | Prompt changes near the noise floor | 2× | ~$5 |
 
 Estimates use §5.5's ~$0.03 per ranking call. Judge calls cost less per call (short output) and are assumed at ~$0.02. Check the first real run's `usage` totals against this table, and update the table if reality differs by more than 50% (O-08).
+
+### 8.1 Groq: tokens, not dollars, set the cadence
+
+On Groq `openai/gpt-oss-120b` a ranking call costs ~$0.002, so the dollar column above is ~15× too high. The binding constraint is the account's rate limit: 30 requests/min, 1,000 requests/day, **8,000 tokens/min and 200,000 tokens/day**. A ranking call is ~6.3K tokens and a judge or pairwise call ~3-4K, so:
+
+| Run | Calls | Tokens | Fits |
+| --- | --- | --- | --- |
+| `--mode deterministic`, `--force-llm-failure` | 0 | 0 | Any time |
+| `--mode llm` (30 queries) | 30 | ~190K | About a whole day's budget, ~35 min |
+| `--mode llm --judge --pairwise` (30 queries) | ~110 | ~460K | ~2.5 days: run with `--resume` across days |
+| Smoke: `--ids ft-01,ft-02,ft-03,ft-04,con-01,thin-01,adv-01 --judge --pairwise` | ~26 | ~110K | One run, ~30 min |
+
+Every LLM call, the judge's included, goes through the same process-wide rate limiter, so a run paces itself to about one ranking call a minute.
 
 ---
 

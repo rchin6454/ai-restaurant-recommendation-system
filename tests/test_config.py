@@ -51,6 +51,11 @@ def test_defaults_match_architecture(clean_env):
     assert s.rank_weights == RankWeights(rating=0.45, votes=0.20, cuisine=0.20, budget=0.15)
     assert s.llm_timeout_s == 30
     assert s.enable_semantic_search is False
+    assert (s.llm_requests_per_minute, s.llm_requests_per_day, s.llm_tokens_per_minute, s.llm_tokens_per_day) == (
+        30, 1000, 8000, 200_000)  # the account's gpt-oss-120b limits
+    assert s.llm_rate_limit_max_wait_s == 10
+    assert (s.response_cache_enabled, s.response_cache_ttl_s, s.response_cache_max_entries) == (True, 3600, 512)
+    assert s.api_requests_per_minute == 10
     assert s.catalog_path == PROJECT_ROOT / "data" / "processed" / "restaurants.parquet"
     assert s.api_url == "http://localhost:8000"
     assert s.log_level == "INFO"
@@ -78,7 +83,8 @@ def test_empty_api_key_means_degraded_mode(clean_env):
 
 @pytest.mark.parametrize(
     ("var", "value"),
-    [("MIN_CANDIDATES", "ten"), ("LLM_TIMEOUT_S", "-1"), ("LOG_LEVEL", "LOUD"), ("RANK_WEIGHTS__RATING", "0.9")],
+    [("MIN_CANDIDATES", "ten"), ("LLM_TIMEOUT_S", "-1"), ("LOG_LEVEL", "LOUD"), ("RANK_WEIGHTS__RATING", "0.9"),
+     ("LLM_CANDIDATE_K", "500")],  # O-03
 )
 def test_invalid_values_fail_at_startup_naming_the_setting(clean_env, var, value):  # O-12
     clean_env.setenv(var, value)

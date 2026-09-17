@@ -1,11 +1,13 @@
-"""Orchestration (architecture §6; plan 3.5-3.6).
+"""Orchestration (architecture §6; plan 3.5-3.6, 5.1).
 
-normalize → retrieve → pre-rank → LLM rank (deterministic fallback) → grounding gate → response.
-This is the only module that knows the full sequence.
+normalize → retrieve → pre-rank → LLM rank (deterministic fallback) → grounding gate → response,
+behind an exact-match response cache. This is the only module that knows the full sequence.
 """
 
 from __future__ import annotations
 
+import hashlib
+import json
 import time
 from dataclasses import dataclass
 
@@ -14,6 +16,7 @@ import pandas as pd
 
 from src.config import Settings, get_logger, settings as default_settings
 from src.core import filters
+from src.core.cache import ResponseCache
 from src.core.models import (
     Preferences,
     RankingTrace,
@@ -25,9 +28,15 @@ from src.core.ranking import deterministic_rank, explain, pre_rank
 from src.data.catalog import Vocabulary, build_vocabulary, get_catalog, get_vocabulary
 from src.data.cleaning import BUDGET_BANDS
 from src.llm.client import LLMUnavailable
+from src.llm.prompts import RANKING_SYSTEM_PROMPT
 from src.llm.ranker import RankedOutput, llm_rank
 
 logger = get_logger(__name__)
+
+PROMPT_SHA256 = hashlib.sha256(RANKING_SYSTEM_PROMPT.encode("utf-8")).hexdigest()
+response_cache = ResponseCache(
+    ttl_s=default_settings.response_cache_ttl_s, max_entries=default_settings.response_cache_max_entries
+)
 
 
 def recommend(
@@ -39,22 +48,78 @@ def recommend(
     use_llm: bool = True,
     llm_client: groq.Groq | None = None,
 ) -> RecommendationResponse:
+    """Answer from the response cache when possible (5.1), otherwise compute.
+
+    Only the production path is cached: the process catalog and the real Groq client. A caller that
+    injects a catalog or a client (tests, the eval's forced-failure run) always gets a fresh answer.
+    """
     started = time.perf_counter()
     config = config or default_settings
+    key = None
+    if config.response_cache_enabled and catalog is None and llm_client is None:
+        key = cache_key(prefs, top_n or config.default_top_n, use_llm, config)
+        hit = response_cache.get(key)
+        if hit is not None:
+            return hit.model_copy(update={"cached": True, "latency_ms": round((time.perf_counter() - started) * 1000)})
+    response = _recommend(prefs, top_n, catalog=catalog, config=config, use_llm=use_llm, llm_client=llm_client)
+    if key is not None and _stable(response, use_llm, config):
+        response_cache.put(key, response)
+    return response
+
+
+def cache_key(prefs: Preferences, top_n: int, use_llm: bool, config: Settings) -> str:
+    """Everything that changes the answer. Casing, cuisine order and free-text spacing don't."""
+    p = prefs.model_dump()
+    p["location"] = p["location"].casefold() if p["location"] else None
+    p["cuisines"] = sorted({c.casefold() for c in p["cuisines"]})
+    p["free_text"] = " ".join(p["free_text"].split()) if p["free_text"] else None
+    return json.dumps(
+        {
+            "prefs": p,
+            "top_n": top_n,
+            "llm": use_llm and config.llm_enabled,
+            "model": config.model,
+            "prompt": PROMPT_SHA256,
+            "rank_weights": config.rank_weights.model_dump(),
+            "llm_candidate_k": config.llm_candidate_k,
+            "min_candidates": config.min_candidates,
+            "max_chain_outlets": config.max_chain_outlets,
+        },
+        sort_keys=True,
+    )
+
+
+def _stable(response: RecommendationResponse, use_llm: bool, config: Settings) -> bool:
+    """Cache only answers that would come out the same next time. A fallback caused by a timeout, a 429
+    or the rate limiter is transient: caching it would pin template explanations for the whole TTL."""
+    trace = response.trace
+    if trace is None or trace.ranker == "llm":
+        return True
+    return not (use_llm and config.llm_enabled)
+
+
+def _recommend(
+    prefs: Preferences,
+    top_n: int | None,
+    *,
+    catalog: pd.DataFrame | None,
+    config: Settings,
+    use_llm: bool,
+    llm_client: groq.Groq | None,
+) -> RecommendationResponse:
+    started = time.perf_counter()
     top_n = top_n or config.default_top_n
     if top_n < 1:
         raise ValueError("top_n must be at least 1")  # I-19
-    if catalog is None:
-        catalog, vocab = get_catalog(), get_vocabulary()
-    else:
-        vocab = build_vocabulary(catalog)
+    catalog, vocab = _catalog_and_vocab(catalog)
     llm_available = use_llm and (config.llm_enabled or llm_client is not None)
 
     def respond(**fields) -> RecommendationResponse:
         fields.setdefault("degraded", not llm_available)
         return RecommendationResponse(latency_ms=round((time.perf_counter() - started) * 1000), **fields)
 
-    normalized = filters.normalize(prefs, vocab)
+    listed = _shortlist(prefs, catalog, vocab, config)
+    normalized = listed.normalized
     if normalized.coverage_error:  # I-02 / W-1: stop — never answer a Delhi query with Bengaluru results
         return respond(
             outcome="coverage_error",
@@ -76,8 +141,8 @@ def recommend(
             )
         caveats.append(f"Ignored {missing}: not a cuisine in the catalog.{closest}")
 
-    requested = filters.Constraints.from_prefs(normalized.prefs, vocab)
-    retrieval = filters.retrieve(catalog, normalized.prefs, vocab, min_candidates=config.min_candidates)
+    requested, retrieval = listed.requested, listed.retrieval
+    assert requested is not None and retrieval is not None  # normalization didn't stop the request
     applied = filters.applied_filters(retrieval.constraints, vocab)
     caveats.extend(r.reason for r in retrieval.relaxations)  # F-09
     if retrieval.hidden_unrated:  # F-10
@@ -97,14 +162,7 @@ def recommend(
             blocking_constraints=[name for name, _ in retrieval.blocking],
         )
 
-    candidates = pre_rank(
-        retrieval.pool,
-        requested,
-        weights=config.rank_weights,
-        k=config.llm_candidate_k,
-        max_chain_outlets=config.max_chain_outlets,
-        rating_prior=vocab.rating_prior,
-    )
+    candidates = listed.candidates
     stretch_band = _stretch_band(retrieval, requested)
     if not use_llm:
         trace = RankingTrace(ranker="deterministic", fallback_reason="LLM ranking disabled for this request")
@@ -128,6 +186,52 @@ def recommend(
         degraded=trace.ranker == "deterministic",
         trace=trace,
     )
+
+
+# ---------------------------------------------------------------------------
+# Shortlist: the retrieval half, also used by the eval (M-01, M-13, M-21)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Shortlist:
+    """What the ranker would be shown for a request."""
+
+    normalized: filters.Normalized
+    requested: filters.Constraints | None  # None when normalization stopped the request
+    retrieval: filters.Retrieval | None
+    candidates: pd.DataFrame  # pre-ranked, at most `llm_candidate_k` rows; empty when nothing gets ranked
+
+
+def shortlist(prefs: Preferences, *, catalog: pd.DataFrame | None = None, config: Settings | None = None) -> Shortlist:
+    """Normalize → filter and relax → pre-rank, with no ranker and no cache."""
+    catalog, vocab = _catalog_and_vocab(catalog)
+    return _shortlist(prefs, catalog, vocab, config or default_settings)
+
+
+def _shortlist(prefs: Preferences, catalog: pd.DataFrame, vocab: Vocabulary, config: Settings) -> Shortlist:
+    normalized = filters.normalize(prefs, vocab)
+    if normalized.coverage_error or (normalized.unknown_cuisines and not normalized.prefs.cuisines):
+        return Shortlist(normalized, None, None, catalog.iloc[:0])
+    requested = filters.Constraints.from_prefs(normalized.prefs, vocab)
+    retrieval = filters.retrieve(catalog, normalized.prefs, vocab, min_candidates=config.min_candidates)
+    if retrieval.pool.empty:
+        return Shortlist(normalized, requested, retrieval, retrieval.pool)
+    candidates = pre_rank(
+        retrieval.pool,
+        requested,
+        weights=config.rank_weights,
+        k=config.llm_candidate_k,
+        max_chain_outlets=config.max_chain_outlets,
+        rating_prior=vocab.rating_prior,
+    )
+    return Shortlist(normalized, requested, retrieval, candidates)
+
+
+def _catalog_and_vocab(catalog: pd.DataFrame | None) -> tuple[pd.DataFrame, Vocabulary]:
+    if catalog is None:
+        return get_catalog(), get_vocabulary()
+    return catalog, build_vocabulary(catalog)
 
 
 def _rank_and_ground(

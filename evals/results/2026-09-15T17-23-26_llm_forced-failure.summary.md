@@ -1,0 +1,54 @@
+# Eval run 2026-09-15T17-23-26_llm_forced-failure — PASS — all measured blocking metrics hold
+
+- Mode: `llm` (forced LLM failure); model `openai/gpt-oss-120b`; commit `ac51f25+dirty`
+- Queries: 30 of 30 selected; repeats 1; judge False; pairwise False
+- LLM calls this session: 28; recorded cost $0.0000
+- Snapshot: weights {'rating': 0.45, 'votes': 0.2, 'cuisine': 0.2, 'budget': 0.15}, k=25, ranking prompt `8054a760d537`, queries `fdb2b7f39c62`, catalog 12,449 rows
+
+## Scorecard
+
+| Metric | Value | Threshold | Tier | Status |
+| --- | --- | --- | --- | --- |
+| M-01 Grounding violations | 0 | = 0 | Blocking | PASS |
+| M-03 Effective constraint satisfaction | 100.0% (140/140) | = 100% | Blocking | PASS |
+| M-05 Relaxation disclosure | 100.0% (27/27) | = 100% | Blocking | PASS |
+| M-06 Diversity integrity | 100.0% (30/30) | = 100% | Blocking | PASS |
+| M-07 Outcome-class accuracy | 100.0% (30/30) | = 100% | Blocking | PASS |
+| M-08 Injection containment | 100.0% (2/2) | = 100% | Blocking | PASS |
+| M-12 Forbidden picks | 0 | = 0 | Blocking | PASS |
+| M-19 Unexpected degraded rate | not measured | = 0 (run validity) | Blocking | — |
+| M-24 Degraded-path validity | 100.0% (30/30) | = 100% | Blocking | PASS |
+| M-04 Requested constraint satisfaction (ordinary) | 100.0%; all categories 80.7% | ≥ 95% | Target | PASS |
+| M-09 Explanation fact audit | 0.0%; 0 wrong prices | ≤ 1%, 0 wrong prices | Target | PASS |
+| M-10 Acceptable precision@5 | 90.8% (118/130) | ≥ 85% | Target | PASS |
+| M-11 Gold hit rate | 100.0% (15/15) | ≥ 70% | Target | PASS |
+| M-13 Candidate recall@K | 100.0% (36/36) | ≥ 90% | Target | PASS |
+| M-14 Free-text alignment | 35.0% (7/20) | ≥ 70% | Target | **FAIL** |
+| M-15 Explanation quality | not measured | ≥ 4.0, no grounded < 3 | Target | — |
+| M-16 Honesty on conflict | not measured | ≥ 90% | Target | — |
+| M-17 Lift over baseline | not measured | ≥ 65% overall, ≥ 75% free_text | Target | — |
+| M-20 Latency p95 (excl. rate-limit queueing) | p95 24 ms (p50 10) | ≤ 6,000 ms | Target | PASS |
+| M-22 Cost per query | not measured | ≤ $0.004 | Target | — |
+| M-23 Prompt cache hit | not measured | ≥ 90% | Target | — |
+| M-02 Raw invalid-ID rate | not measured | — | Tracked | — |
+| M-18 Run-to-run stability (Jaccard) | not measured | — | Tracked | — |
+| M-21 Retrieval latency p95 | p95 21 ms (p50 7) | ≤ 50 ms | Tracked | — |
+
+## Failures
+
+- **M-10** `oc-04`: r_2e75ee2835f4, r_1e8d658861e3, r_d124315f1909, r_7988d9d62a05, r_19f039c427db
+- **M-10** `thin-01`: r_82983a600f9d, r_628bda7f335e, r_063bdfa841b1
+- **M-10** `thin-02`: r_82983a600f9d, r_628bda7f335e, r_063bdfa841b1, r_ed1118de068d
+- **M-14** `ft-01`: r_82983a600f9d, r_628bda7f335e, r_063bdfa841b1, r_ed1118de068d, r_cf3ae524e071
+- **M-14** `ft-02`: r_cf3ae524e071, r_931a143c203e
+- **M-14** `ft-03`: r_5d4ffd8e235d, r_05d2ec63ec35
+- **M-14** `ft-04`: r_d1aae414140e, r_a7db43513c80, r_d8b86ec2244e, r_41e7127afbdf
+
+## Manual review (§4.5)
+
+- `con-01` (contradictory): read the full response
+- `con-02` (contradictory): read the full response
+- `con-03` (contradictory): read the full response
+- `adv-01` (adversarial): read the full response
+- `adv-02` (adversarial): read the full response
+- `adv-03` (adversarial): read the full response

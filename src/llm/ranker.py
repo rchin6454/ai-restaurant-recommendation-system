@@ -2,16 +2,19 @@
 
 The model returns IDs and prose only. Checking those IDs against the candidate set is the
 grounding gate's job (`src.core.recommender.validate_and_join`), not this module's.
+`structured_completion` is the one guarded path to Groq; the eval judge (plan 5.9) uses it too.
 """
 
 from __future__ import annotations
 
 import json
+import math
 import time
 from collections.abc import Sequence
 from dataclasses import dataclass
 
 import groq
+import httpx
 import pandas as pd
 from pydantic import BaseModel, ValidationError
 
@@ -20,11 +23,19 @@ from src.core.models import Preferences, RankingTrace, Relaxation
 from src.data.cleaning import BUDGET_BANDS
 from src.llm.client import LLMUnavailable, call_budget, estimate_cost_usd, get_client, profile_for
 from src.llm.prompts import RANKING_SYSTEM_PROMPT
+from src.llm.rate_limit import RateLimitExceeded, limiter_for
 
 logger = get_logger(__name__)
 
 MAX_DISHES = 5  # L-26
 SCHEMA_NAME = "restaurant_recommendations"
+
+# Rate-limit reservation per call, corrected to real usage afterwards. Measured on gpt-oss-120b
+# (2026-09-15): 3.28 prompt characters per token, 1.0-2.4K completion tokens including reasoning.
+# Both are rounded in the safe direction so an estimate rarely undercounts.
+CHARS_PER_TOKEN = 3.0
+COMPLETION_TOKEN_RESERVE = 2500
+PAUSE_AFTER_429_S = 60.0  # when Groq's 429 carries no usable `retry-after`
 
 
 class RankedPick(BaseModel):
@@ -143,9 +154,102 @@ def build_messages(
     return [{"role": "system", "content": RANKING_SYSTEM_PROMPT}, {"role": "user", "content": user}]
 
 
+def estimate_tokens(messages: Sequence[dict[str, str]], completion_reserve: int = COMPLETION_TOKEN_RESERVE) -> int:
+    return math.ceil(sum(len(m["content"]) for m in messages) / CHARS_PER_TOKEN) + completion_reserve
+
+
+def _retry_after_s(response: httpx.Response | None) -> float:
+    try:
+        seconds = float(response.headers["retry-after"])  # type: ignore[union-attr]
+    except (AttributeError, KeyError, TypeError, ValueError):  # absent, or an HTTP-date
+        return PAUSE_AFTER_429_S
+    return min(max(seconds, 1.0), 86_400.0)
+
+
 # ---------------------------------------------------------------------------
-# The call (3.4, 3.7)
+# The guarded call (3.4, 3.7) — shared with the eval judge
 # ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class StructuredCompletion:
+    content: str
+    trace: RankingTrace  # usage and cost of the billed call
+
+
+def structured_completion(
+    messages: Sequence[dict[str, str]],
+    *,
+    schema_name: str,
+    schema: dict,
+    config: Settings,
+    client: groq.Groq | None = None,
+    completion_reserve: int = COMPLETION_TOKEN_RESERVE,
+) -> StructuredCompletion:
+    """One JSON-schema completion with every guard: key check (L-01), call cap (L-24), the Groq rate
+    limiter, the 429 pause, and finish-reason and empty-content checks. Raises `LLMUnavailable` for
+    every failure; callers never see a Groq exception. Parsing the content is the caller's job."""
+    client = client or get_client(config)
+    profile = profile_for(config.model)
+    call_budget.spend()
+    limiter = limiter_for(config)
+    try:
+        reservation = limiter.acquire(
+            estimate_tokens(messages, completion_reserve), max_wait_s=config.llm_rate_limit_max_wait_s
+        )
+    except RateLimitExceeded as exc:  # degrade now rather than earn a 429
+        raise LLMUnavailable(str(exc)) from exc
+
+    started = time.perf_counter()
+    try:
+        completion = client.chat.completions.create(
+            model=config.model,
+            messages=list(messages),
+            response_format={
+                "type": "json_schema",
+                "json_schema": {"name": schema_name, "strict": profile.strict_schema, "schema": schema},
+            },
+            max_completion_tokens=profile.max_completion_tokens,
+            **profile.reasoning,
+        )
+    except groq.RateLimitError as exc:  # L-04: limits used elsewhere on this key; GroqClient doesn't retry
+        pause = _retry_after_s(exc.response)
+        reservation.settle(0)  # a rejected request consumed no tokens; it still counts as a request
+        limiter.block_for(pause, "Groq answered 429 (rate limited)")
+        raise LLMUnavailable(f"Groq API error: RateLimitError (429); LLM calls paused for {math.ceil(pause)} s") from exc
+    except groq.APIError as exc:  # L-03…L-08, after the SDK's own retries; the reservation stands
+        status = getattr(exc, "status_code", None)
+        raise LLMUnavailable(f"Groq API error: {type(exc).__name__}" + (f" ({status})" if status else "")) from exc
+
+    usage = completion.usage
+    prompt_tokens = getattr(usage, "prompt_tokens", 0) or 0
+    completion_tokens = getattr(usage, "completion_tokens", 0) or 0
+    cached_tokens = getattr(getattr(usage, "prompt_tokens_details", None), "cached_tokens", 0) or 0
+    if prompt_tokens or completion_tokens:
+        reservation.settle(prompt_tokens + completion_tokens)
+    trace = RankingTrace(
+        ranker="llm",
+        model=config.model,
+        prompt_tokens=prompt_tokens,
+        cached_tokens=cached_tokens,
+        completion_tokens=completion_tokens,
+        cost_usd=estimate_cost_usd(profile, prompt_tokens, cached_tokens, completion_tokens),
+        llm_latency_ms=round((time.perf_counter() - started) * 1000),
+        rate_limit_wait_ms=round(reservation.waited_s * 1000),
+    )
+    # 3.7: an identical rerun should log cached_tokens > 0; zero means volatile bytes in the prefix (L-21).
+    logger.info("llm call", extra={"schema": schema_name, **trace.model_dump(include={
+        "model", "prompt_tokens", "cached_tokens", "completion_tokens", "cost_usd", "llm_latency_ms", "rate_limit_wait_ms"})})
+
+    choice = completion.choices[0] if completion.choices else None
+    if choice is None:
+        raise LLMUnavailable("response had no choices", trace=trace)
+    if choice.finish_reason != "stop":  # L-09 filtered, L-10 truncated at max_completion_tokens
+        raise LLMUnavailable(f"finish_reason={choice.finish_reason}", trace=trace)
+    content = choice.message.content
+    if not content or not content.strip():  # L-11
+        raise LLMUnavailable("empty response content", trace=trace)
+    return StructuredCompletion(content=content, trace=trace)
 
 
 def llm_rank(
@@ -158,53 +262,15 @@ def llm_rank(
     client: groq.Groq | None = None,
 ) -> LLMRanking:
     """Raises `LLMUnavailable` for every failure mode; callers never see a Groq exception."""
-    client = client or get_client(config)
-    profile = profile_for(config.model)
-    call_budget.spend()
-
-    started = time.perf_counter()
-    try:
-        completion = client.chat.completions.create(
-            model=config.model,
-            messages=build_messages(candidates, prefs, top_n, relaxations),
-            response_format={
-                "type": "json_schema",
-                "json_schema": {"name": SCHEMA_NAME, "strict": profile.strict_schema, "schema": RESPONSE_SCHEMA},
-            },
-            max_completion_tokens=profile.max_completion_tokens,
-            **profile.reasoning,
-        )
-    except groq.APIError as exc:  # L-03…L-08, after the SDK's own retries
-        status = getattr(exc, "status_code", None)
-        raise LLMUnavailable(f"Groq API error: {type(exc).__name__}" + (f" ({status})" if status else "")) from exc
-
-    usage = completion.usage
-    prompt_tokens = getattr(usage, "prompt_tokens", 0) or 0
-    completion_tokens = getattr(usage, "completion_tokens", 0) or 0
-    cached_tokens = getattr(getattr(usage, "prompt_tokens_details", None), "cached_tokens", 0) or 0
-    trace = RankingTrace(
-        ranker="llm",
-        model=config.model,
-        prompt_tokens=prompt_tokens,
-        cached_tokens=cached_tokens,
-        completion_tokens=completion_tokens,
-        cost_usd=estimate_cost_usd(profile, prompt_tokens, cached_tokens, completion_tokens),
-        llm_latency_ms=round((time.perf_counter() - started) * 1000),
+    result = structured_completion(
+        build_messages(candidates, prefs, top_n, relaxations),
+        schema_name=SCHEMA_NAME,
+        schema=RESPONSE_SCHEMA,
+        config=config,
+        client=client,
     )
-    # 3.7: an identical rerun should log cached_tokens > 0; zero means volatile bytes in the prefix (L-21).
-    logger.info("llm call", extra=trace.model_dump(include={"model", "prompt_tokens", "cached_tokens",
-                                                            "completion_tokens", "cost_usd", "llm_latency_ms"}))
-
-    choice = completion.choices[0] if completion.choices else None
-    if choice is None:
-        raise LLMUnavailable("response had no choices", trace=trace)
-    if choice.finish_reason != "stop":  # L-09 filtered, L-10 truncated at max_completion_tokens
-        raise LLMUnavailable(f"finish_reason={choice.finish_reason}", trace=trace)
-    content = choice.message.content
-    if not content or not content.strip():  # L-11
-        raise LLMUnavailable("empty response content", trace=trace)
     try:
-        output = RankedOutput.model_validate_json(content)
+        output = RankedOutput.model_validate_json(result.content)
     except ValidationError as exc:
-        raise LLMUnavailable(f"response failed schema validation ({exc.error_count()} errors)", trace=trace) from exc
-    return LLMRanking(output=output, trace=trace)
+        raise LLMUnavailable(f"response failed schema validation ({exc.error_count()} errors)", trace=result.trace) from exc
+    return LLMRanking(output=output, trace=result.trace)
